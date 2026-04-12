@@ -1,0 +1,48 @@
+﻿"""系统设置页面。"""
+
+from __future__ import annotations
+
+import streamlit as st
+
+from pubg_match_analyzer.ui.styles import apply_global_styles
+from pubg_match_analyzer.core.ui_state import LOCAL_SETTINGS_FILE, clear_local_settings, ensure_session_state
+
+
+ensure_session_state()
+apply_global_styles()
+
+st.title("系统设置")
+st.caption("当前页面只保留基础查询设置，改动会自动保存到本地。")
+
+st.text_input(
+    "PUBG API Key",
+    key="api_key",
+    type="password",
+    help="对局识别中的玩家昵称查询依赖 players 接口，需要有效的 API Key。",
+)
+
+col1, col2 = st.columns(2)
+with col1:
+    st.text_input(
+        "平台",
+        key="platform",
+        help="默认使用 steam，需要时也可以填写 psn、xbox、tournament 等平台标识。",
+    )
+with col2:
+    st.number_input(
+        "默认最近对局窗口",
+        min_value=5,
+        max_value=100,
+        key="recent_match_limit",
+    )
+
+relative_settings_path = LOCAL_SETTINGS_FILE.relative_to(LOCAL_SETTINGS_FILE.parents[1])
+st.caption(f"本地保存路径：`{relative_settings_path}`")
+
+if st.button("清除本地保存", use_container_width=True):
+    clear_local_settings()
+    st.info("本地保存已清除。当前会话中的值暂时保留，重启后不会再自动恢复。")
+
+st.success("设置会自动保存到本地。重启 Streamlit 后会自动恢复。")
+
+
