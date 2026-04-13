@@ -127,6 +127,10 @@ def ensure_session_state() -> None:
         "generated_export_sheet_names": [],
         "generated_export_excel_bytes": b"",
         "generated_export_csv_zip_bytes": b"",
+        "generated_participant_list_match_id": "",
+        "generated_participant_list_bytes": b"",
+        "generated_participant_list_filename": "",
+        "generated_participant_list_summary": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -155,5 +159,9 @@ def clear_loaded_match() -> None:
     st.session_state.generated_export_sheet_names = []
     st.session_state.generated_export_excel_bytes = b""
     st.session_state.generated_export_csv_zip_bytes = b""
+    st.session_state.generated_participant_list_match_id = ""
+    st.session_state.generated_participant_list_bytes = b""
+    st.session_state.generated_participant_list_filename = ""
+    st.session_state.generated_participant_list_summary = {}
 
 

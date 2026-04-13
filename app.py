@@ -22,6 +22,7 @@ def build_navigation() -> st.navigation:
             st.Page(PAGES_DIR / "01_match_detect.py", title="对局识别"),
             st.Page(PAGES_DIR / "02_match_list.py", title="对局列表"),
             st.Page(PAGES_DIR / "03_match_detail.py", title="对局详情"),
+            st.Page(PAGES_DIR / "04_participant_list.py", title="参赛者名单"),
             st.Page(PAGES_DIR / "05_export_center.py", title="导出中心"),
             st.Page(PAGES_DIR / "06_system_settings.py", title="系统设置"),
         ],

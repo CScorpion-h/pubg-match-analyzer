@@ -1,13 +1,13 @@
-# PUBG Match Analyzer
+﻿# PUBG Match Analyzer
 
-一个基于 Streamlit 的 PUBG 对局分析工具，用于识别共同对局、查看对局详情，并导出对局结果。
+一个基于 Streamlit 的 PUBG 对局分析工具，用于识别共同出现的自定义房对局、查看单场详情，并导出结果。
 
 ## 当前功能
 
 - 根据玩家昵称识别共同出现的自定义房对局
 - 查看单场对局的基础信息、玩家明细和队伍汇总
-- 导出 `MatchOverview`、`PlayerStats`、`TeamSummary`
-- 本地保存基础设置：`API Key`、`平台`、`最近对局窗口`
+- 导出 `对局概览`、`玩家明细`、`队伍汇总`
+- 本地自动保存基础设置：`API Key`、`平台`、`最近对局窗口`
 
 ## 当前规则
 
@@ -34,12 +34,11 @@ pubg_match_analyzer/
 ```
 
 目录说明：
-
 - `app.py`：Streamlit 入口
-- `pubg_match_analyzer/configs/`：本地配置示例
+- `pubg_match_analyzer/configs/`：本地配置与示例配置
 - `pubg_match_analyzer/core/`：常量、数据模型、会话状态
 - `pubg_match_analyzer/pages/`：页面脚本
-- `pubg_match_analyzer/services/`：PUBG API 读取、match 解析、导出逻辑
+- `pubg_match_analyzer/services/`：PUBG API 读取、对局解析、导出逻辑
 - `pubg_match_analyzer/ui/`：样式和界面辅助
 
 ## 运行方式
@@ -52,15 +51,9 @@ streamlit run app.py
 ## 本地配置
 
 程序运行时会自动生成本地配置文件：
-
 - `pubg_match_analyzer/configs/local_settings.json`
 
-
-
 本地配置文件用于保存：
-
 - `PUBG API Key`
 - `平台`
 - `最近对局窗口`
-
-

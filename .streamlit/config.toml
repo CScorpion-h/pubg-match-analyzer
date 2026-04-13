@@ -1,6 +1,5 @@
-﻿[theme]
+[theme]
 base = "light"
 font = "Microsoft YaHei"
 headingFont = "Microsoft YaHei"
 codeFont = "Microsoft YaHei"
-

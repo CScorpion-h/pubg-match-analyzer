@@ -53,6 +53,65 @@ MAP_NAME_LABELS = {
     "Range_Main": "训练场",
 }
 
+CANDIDATE_MATCH_COLUMN_LABELS = {
+    "match_id": "对局ID",
+    "started_at": "开始时间",
+    "map_name": "地图",
+    "game_mode": "模式",
+    "player_count": "参赛人数",
+    "hit_input_count": "命中输入人数",
+    "hit_rate": "命中率",
+    "game_mode_category": "模式分类",
+    "hit_input_names": "命中玩家名单",
+}
+
+MATCH_OVERVIEW_COLUMN_LABELS = {
+    "match_id": "对局ID",
+    "started_at": "开始时间",
+    "duration": "对局时长",
+    "map_name": "地图",
+    "game_mode": "模式",
+    "game_mode_category": "模式分类",
+    "match_type": "对局类型",
+    "is_supported_custom_match": "是否为自定义房",
+    "player_count": "参赛人数",
+    "roster_count": "队伍数",
+    "telemetry_url": "Telemetry链接",
+}
+
+PLAYER_STATS_COLUMN_LABELS = {
+    "match_id": "对局ID",
+    "player_name": "玩家昵称",
+    "player_account_id": "玩家账号ID",
+    "team_index": "队伍序号",
+    "source_team_id": "原始队伍ID",
+    "placement": "名次",
+    "kills": "淘汰",
+    "assists": "助攻",
+    "damage_dealt": "总伤害",
+    "time_survived": "存活时长",
+    "dbnos": "击倒数",
+    "headshot_kills": "爆头淘汰",
+}
+
+TEAM_SUMMARY_COLUMN_LABELS = {
+    "match_id": "对局ID",
+    "team_index": "队伍序号",
+    "source_team_id": "原始队伍ID",
+    "rank": "队伍排名",
+    "won": "是否获胜",
+    "player_count": "队员人数",
+    "player_names": "队员名单",
+    "total_kills": "队伍总淘汰",
+    "total_damage": "队伍总伤害",
+}
+
+EXPORT_SHEET_LABELS = {
+    "match_overview": "对局概览",
+    "player_stats": "玩家明细",
+    "team_summary": "队伍汇总",
+}
+
 
 def normalize_player_name(name: str | None) -> str:
     """把昵称转成统一的小写键，便于去重和匹配。"""

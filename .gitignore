@@ -18,12 +18,18 @@ configs/local_settings.json
 .streamlit/secrets.toml
 .env
 .env.*
+telemetry_exports/
+*_telemetry.json
+*_参赛者名单.xlsx
+模板案例.xlsx
+3月水友赛报名收集表（收集结果）.xlsx
 
 # Local design and planning materials
 proto_*.png
 docs_v2/
 pubg_match_analyzer_prd_v2.md
 pubg_match_analyzer_design.docx
+pubg_match_analyzer_participant_list_design.md
 
 # Test and lint caches
 .pytest_cache/

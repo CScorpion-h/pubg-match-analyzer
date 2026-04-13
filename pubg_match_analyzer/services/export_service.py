@@ -7,8 +7,23 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 
-from pubg_match_analyzer.core.constants import display_game_mode, display_game_mode_category
+from pubg_match_analyzer.core.constants import (
+    CANDIDATE_MATCH_COLUMN_LABELS,
+    EXPORT_SHEET_LABELS,
+    MATCH_OVERVIEW_COLUMN_LABELS,
+    PLAYER_STATS_COLUMN_LABELS,
+    TEAM_SUMMARY_COLUMN_LABELS,
+    display_game_mode,
+    display_game_mode_category,
+)
 from pubg_match_analyzer.core.models import CandidateMatch, MatchOverview, PlayerMatchStat, TeamSummary
+
+
+def _rename_columns(dataframe: pd.DataFrame, labels: dict[str, str]) -> pd.DataFrame:
+    """按给定映射把 DataFrame 列名转换成中文表头。"""
+    if dataframe.empty:
+        return dataframe
+    return dataframe.rename(columns=labels)
 
 
 def candidate_matches_df(items: list[CandidateMatch]) -> pd.DataFrame:
@@ -28,14 +43,15 @@ def candidate_matches_df(items: list[CandidateMatch]) -> pd.DataFrame:
                 "hit_input_names": item.hit_input_names,
             }
         )
-    return pd.DataFrame(rows)
+    return _rename_columns(pd.DataFrame(rows), CANDIDATE_MATCH_COLUMN_LABELS)
 
 
 def match_overview_df(item: MatchOverview | None) -> pd.DataFrame:
     """生成 MatchOverview 工作表。"""
     if item is None:
         return pd.DataFrame()
-    return pd.DataFrame(
+
+    dataframe = pd.DataFrame(
         [
             {
                 "match_id": item.match_id,
@@ -43,27 +59,30 @@ def match_overview_df(item: MatchOverview | None) -> pd.DataFrame:
                 "duration": item.duration,
                 "map_name": item.map_name,
                 "game_mode": display_game_mode(item.game_mode),
-                "game_mode_code": item.game_mode,
                 "game_mode_category": display_game_mode_category(item.custom_match_category),
-                "game_mode_category_code": item.custom_match_category,
                 "match_type": item.match_type,
-                "is_supported_custom_match": item.is_supported_custom_match,
+                "is_supported_custom_match": "是" if item.is_supported_custom_match else "否",
                 "player_count": item.player_count,
                 "roster_count": item.roster_count,
                 "telemetry_url": item.telemetry_url,
             }
         ]
     )
+    return _rename_columns(dataframe, MATCH_OVERVIEW_COLUMN_LABELS)
 
 
 def player_stats_df(items: list[PlayerMatchStat]) -> pd.DataFrame:
     """生成 PlayerStats 工作表。"""
-    return pd.DataFrame([item.to_dict() for item in items])
+    dataframe = pd.DataFrame([item.to_dict() for item in items])
+    return _rename_columns(dataframe, PLAYER_STATS_COLUMN_LABELS)
 
 
 def team_summary_df(items: list[TeamSummary]) -> pd.DataFrame:
     """生成 TeamSummary 工作表。"""
-    return pd.DataFrame([item.to_dict() for item in items])
+    dataframe = pd.DataFrame([item.to_dict() for item in items])
+    if "won" in dataframe.columns:
+        dataframe["won"] = dataframe["won"].map(lambda value: "是" if value else "否")
+    return _rename_columns(dataframe, TEAM_SUMMARY_COLUMN_LABELS)
 
 
 def build_export_tables(
@@ -78,11 +97,11 @@ def build_export_tables(
     """根据勾选项组装待导出的工作表列表。"""
     tables: list[tuple[str, pd.DataFrame]] = []
     if include_match_overview:
-        tables.append(("MatchOverview", match_overview_df(overview)))
+        tables.append((EXPORT_SHEET_LABELS["match_overview"], match_overview_df(overview)))
     if include_player_stats:
-        tables.append(("PlayerStats", player_stats_df(player_stats)))
+        tables.append((EXPORT_SHEET_LABELS["player_stats"], player_stats_df(player_stats)))
     if include_team_summary:
-        tables.append(("TeamSummary", team_summary_df(team_summaries)))
+        tables.append((EXPORT_SHEET_LABELS["team_summary"], team_summary_df(team_summaries)))
     return tables
 
 
@@ -140,5 +159,3 @@ def build_csv_zip_bytes(
         for sheet_name, dataframe in tables:
             zf.writestr(f"{sheet_name}.csv", dataframe.to_csv(index=False).encode("utf-8-sig"))
     return buffer.getvalue()
-
-

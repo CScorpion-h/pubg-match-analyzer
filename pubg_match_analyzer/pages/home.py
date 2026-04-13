@@ -14,7 +14,7 @@ ensure_session_state()
 apply_global_styles()
 
 st.title("PUBG 水友赛数据统计工具")
-st.caption("当前版本包含对局识别、对局列表、对局详情、导出中心和系统设置。")
+st.caption("当前版本包含对局识别、对局列表、对局详情、参赛者名单、导出中心和系统设置。")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("平台", st.session_state.platform)
@@ -41,8 +41,9 @@ st.markdown(
 1. 对局识别：根据玩家昵称查共同对局，并保留 `matchType = custom` 的对局。
 2. 命中规则：候选对局只保留至少 {MIN_HIT_PLAYER_COUNT} 名输入玩家共同出现的对局。
 3. 分类信息：`gameMode` 只用于展示房间类别和队伍模式。
-4. 当前导出：支持 `MatchOverview`、`PlayerStats` 和 `TeamSummary`。
-5. 系统设置：当前只保留 PUBG API Key、平台和最近对局窗口。
+4. 参赛者名单：可基于 `roster` 生成主名单，并可选导入报名表补 QQ。
+5. 当前导出：支持 `对局概览`、`玩家明细` 和 `队伍汇总`。
+6. 系统设置：当前只保留 PUBG API Key、平台和最近对局窗口。
 """
 )
 

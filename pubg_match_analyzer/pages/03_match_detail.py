@@ -41,14 +41,14 @@ with tab1:
     filtered = player_df
     if st.session_state.player_search_query.strip():
         filtered = filtered[
-            filtered["player_name"].str.contains(
+            filtered["玩家昵称"].str.contains(
                 st.session_state.player_search_query.strip(),
                 case=False,
                 na=False,
             )
         ]
     # 当前页面固定是一局详情，重复显示同一个 match_id 没有额外信息价值。
-    display_df = filtered.drop(columns=["match_id"], errors="ignore")
+    display_df = filtered.drop(columns=["对局ID"], errors="ignore")
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 with tab2:

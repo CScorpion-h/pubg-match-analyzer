@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from pubg_match_analyzer.core.constants import EXPORT_SHEET_LABELS
 from pubg_match_analyzer.services.export_service import build_csv_zip_bytes, build_excel_bytes
 from pubg_match_analyzer.ui.styles import apply_global_styles
 from pubg_match_analyzer.core.ui_state import ensure_session_state
@@ -37,18 +38,18 @@ if (
 
 with st.form("export_form"):
     st.subheader("导出内容")
-    st.checkbox("对局基础信息（MatchOverview）", key="export_include_match_overview")
-    st.checkbox("玩家明细（PlayerStats）", key="export_include_player_stats")
-    st.checkbox("队伍汇总（TeamSummary）", key="export_include_team_summary")
+    st.checkbox(f"对局基础信息（{EXPORT_SHEET_LABELS['match_overview']}）", key="export_include_match_overview")
+    st.checkbox(f"玩家明细（{EXPORT_SHEET_LABELS['player_stats']}）", key="export_include_player_stats")
+    st.checkbox(f"队伍汇总（{EXPORT_SHEET_LABELS['team_summary']}）", key="export_include_team_summary")
     generate = st.form_submit_button("生成导出文件", type="primary", use_container_width=True)
 
 selected_sheets = []
 if st.session_state.export_include_match_overview:
-    selected_sheets.append("MatchOverview")
+    selected_sheets.append(EXPORT_SHEET_LABELS["match_overview"])
 if st.session_state.export_include_player_stats:
-    selected_sheets.append("PlayerStats")
+    selected_sheets.append(EXPORT_SHEET_LABELS["player_stats"])
 if st.session_state.export_include_team_summary:
-    selected_sheets.append("TeamSummary")
+    selected_sheets.append(EXPORT_SHEET_LABELS["team_summary"])
 
 st.info("修改勾选项后，需要重新点击一次“生成导出文件”。仅切换勾选项不会自动下载。")
 

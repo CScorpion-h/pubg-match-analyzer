@@ -1,0 +1,620 @@
+﻿"""基于 roster 生成参赛者名单工作簿。"""
+
+from __future__ import annotations
+
+from copy import copy
+from dataclasses import dataclass, field
+from datetime import datetime
+from io import BytesIO
+from math import ceil
+from typing import Any
+
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
+
+from pubg_match_analyzer.core.constants import display_game_mode, display_game_mode_category
+from pubg_match_analyzer.core.models import MatchOverview, TeamSummary
+
+THIN_SIDE = Side(style="thin", color="000000")
+ALL_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
+TITLE_FILL = PatternFill(fill_type="solid", fgColor="0D0D0D")
+HEADER_FILL = PatternFill(fill_type="solid", fgColor="0D0D0D")
+INDEX_FILL = PatternFill(fill_type="solid", fgColor="262626")
+MISSING_FILL = PatternFill(fill_type="solid", fgColor="FFF2CC")
+CONFLICT_FILL = PatternFill(fill_type="solid", fgColor="F4B183")
+WHITE_FONT = Font(name="Microsoft YaHei", color="FFFFFF", bold=True)
+TITLE_FONT = Font(name="Microsoft YaHei", color="FFFFFF", bold=True, size=16)
+DATA_FONT = Font(name="Microsoft YaHei", color="000000")
+CENTER = Alignment(horizontal="center", vertical="center")
+PLACEHOLDER_VALUES = {"", "无须作答", "已删除", "没有", "无", "nan", "none", "null"}
+
+
+@dataclass
+class ContactRecord:
+    """报名表中的单条联系人记录。"""
+
+    mode_name: str
+    game_id: str
+    normalized_game_id: str
+    qq: str
+    submitted_at: datetime
+    submitted_at_text: str
+
+
+@dataclass
+class ContactResolution:
+    """某个参赛玩家的 QQ 匹配结果。"""
+
+    player_name: str
+    qq: str = ""
+    status: str = "no_signup"
+    candidate_qqs: list[str] = field(default_factory=list)
+    latest_submitted_at: str = ""
+
+
+@dataclass
+class TeamParticipantGroup:
+    """用于渲染名单模板的队伍数据。"""
+
+    display_team_no: int
+    players: list[ContactResolution]
+
+
+@dataclass
+class ParticipantListResult:
+    """参赛者名单生成结果。"""
+
+    workbook_bytes: bytes
+    template_type: str
+    signup_mode_name: str
+    total_players: int
+    filled_qq_count: int
+    missing_contact_count: int
+    conflict_count: int
+    used_signup_sheet: bool
+
+
+class SignupContactLookup:
+    """对报名表联系人映射做标准化和查询。"""
+
+    def __init__(self, records: list[ContactRecord]):
+        self.records = records
+        self._global_by_id: dict[str, list[ContactRecord]] = {}
+        self._mode_by_id: dict[tuple[str, str], list[ContactRecord]] = {}
+        for record in records:
+            self._global_by_id.setdefault(record.normalized_game_id, []).append(record)
+            if record.mode_name:
+                self._mode_by_id.setdefault((record.mode_name, record.normalized_game_id), []).append(record)
+
+    @classmethod
+    def from_excel_bytes(cls, file_bytes: bytes) -> "SignupContactLookup":
+        """从报名表文件字节流中提取联系人映射。"""
+        dataframe = pd.read_excel(BytesIO(file_bytes))
+        if len(dataframe.columns) < 12:
+            raise ValueError("报名表列数不足，无法识别联系人信息。")
+
+        mode_col = dataframe.columns[2]
+        submitted_at_col = dataframe.columns[1]
+        id_qq_pairs = (
+            (dataframe.columns[3], dataframe.columns[4]),
+            (dataframe.columns[6], dataframe.columns[7]),
+            (dataframe.columns[8], dataframe.columns[9]),
+            (dataframe.columns[10], dataframe.columns[11]),
+        )
+
+        records: list[ContactRecord] = []
+        for _, row in dataframe.iterrows():
+            mode_name = _clean_text(row.get(mode_col))
+            if not mode_name:
+                continue
+
+            submitted_at_raw = row.get(submitted_at_col)
+            submitted_at = _to_datetime(submitted_at_raw)
+            submitted_at_text = _format_datetime(submitted_at)
+
+            for game_id_col, qq_col in id_qq_pairs:
+                game_id = _clean_text(row.get(game_id_col))
+                if not game_id:
+                    continue
+                qq = _clean_text(row.get(qq_col))
+                records.append(
+                    ContactRecord(
+                        mode_name=mode_name,
+                        game_id=game_id,
+                        normalized_game_id=_normalize_key(game_id),
+                        qq=qq,
+                        submitted_at=submitted_at,
+                        submitted_at_text=submitted_at_text,
+                    )
+                )
+
+        return cls(records)
+
+    def resolve(self, player_name: str, signup_mode_name: str | None) -> ContactResolution:
+        """按“玩法优先，全表兜底”的规则为玩家匹配 QQ。"""
+        normalized = _normalize_key(player_name)
+        if not normalized:
+            return ContactResolution(player_name=player_name, status="missing")
+
+        mode_records: list[ContactRecord] = []
+        if signup_mode_name:
+            mode_records = self._mode_by_id.get((signup_mode_name, normalized), [])
+        if mode_records:
+            return _resolve_from_records(player_name, mode_records)
+
+        global_records = self._global_by_id.get(normalized, [])
+        if global_records:
+            return _resolve_from_records(player_name, global_records)
+
+        return ContactResolution(player_name=player_name, status="missing")
+
+
+def _normalize_key(value: str | None) -> str:
+    """把游戏 ID 归一成可匹配的键。"""
+    if not value:
+        return ""
+    return str(value).strip().lower()
+
+
+def _clean_text(value: Any) -> str:
+    """清洗 Excel 单元格文本，过滤常见占位值。"""
+    if value is None or pd.isna(value):
+        return ""
+    raw = str(value).strip()
+    normalized = raw.replace(" ", "").lower()
+    if normalized in PLACEHOLDER_VALUES:
+        return ""
+    return raw
+
+
+def _to_datetime(value: Any) -> datetime:
+    """把 Excel 里的提交时间安全转换成 datetime。"""
+    if isinstance(value, datetime):
+        return value
+    try:
+        ts = pd.to_datetime(value)
+    except Exception:
+        return datetime.min
+    if pd.isna(ts):
+        return datetime.min
+    return ts.to_pydatetime()
+
+
+def _format_datetime(value: datetime) -> str:
+    """格式化时间用于冲突表展示。"""
+    if value == datetime.min:
+        return ""
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _resolve_from_records(player_name: str, records: list[ContactRecord]) -> ContactResolution:
+    """从一组报名记录里解析最终联系人结果。"""
+    non_empty = [record for record in records if record.qq]
+    if not non_empty:
+        return ContactResolution(player_name=player_name, status="missing")
+
+    candidate_qqs = sorted({record.qq for record in non_empty})
+    latest_record = max(non_empty, key=lambda item: item.submitted_at)
+    if len(candidate_qqs) > 1:
+        return ContactResolution(
+            player_name=player_name,
+            qq=latest_record.qq,
+            status="conflict",
+            candidate_qqs=candidate_qqs,
+            latest_submitted_at=latest_record.submitted_at_text,
+        )
+
+    return ContactResolution(
+        player_name=player_name,
+        qq=latest_record.qq,
+        status="matched",
+        latest_submitted_at=latest_record.submitted_at_text,
+    )
+
+
+def infer_participant_template(teams: list[TeamSummary]) -> tuple[str, str]:
+    """根据队伍人数结构推导名单模板类型。"""
+    if not teams:
+        return "四排模板", "squad"
+
+    counts = [team.player_count for team in teams]
+    if all(count == 1 for count in counts):
+        return "单排模板", "solo"
+    if max(counts) > 4:
+        return "1队N人模板", "multi"
+    return "四排模板", "squad"
+
+
+def extract_signup_mode_names(file_bytes: bytes) -> list[str]:
+    """从报名表中提取可供用户选择的玩法名称列表。"""
+    dataframe = pd.read_excel(BytesIO(file_bytes))
+    if len(dataframe.columns) < 3:
+        raise ValueError("报名表列数不足，无法识别玩法字段。")
+
+    mode_col = dataframe.columns[2]
+    values = []
+    seen: set[str] = set()
+    for value in dataframe[mode_col]:
+        mode_name = _clean_text(value)
+        if not mode_name or mode_name in seen:
+            continue
+        seen.add(mode_name)
+        values.append(mode_name)
+    return values
+
+
+def build_participant_list_workbook(
+    *,
+    overview: MatchOverview,
+    teams: list[TeamSummary],
+    signup_excel_bytes: bytes | None = None,
+    signup_mode_name: str | None = None,
+) -> ParticipantListResult:
+    """生成参赛者名单工作簿。"""
+    template_type_label, template_type_code = infer_participant_template(teams)
+    lookup = SignupContactLookup.from_excel_bytes(signup_excel_bytes) if signup_excel_bytes else None
+
+    groups: list[TeamParticipantGroup] = []
+    total_players = 0
+    filled_qq_count = 0
+    missing_contact_count = 0
+    conflict_rows: list[dict[str, str]] = []
+
+    for team in sorted(teams, key=lambda item: (int(item.source_team_id or 10**9), item.team_index)):
+        players: list[ContactResolution] = []
+        for player_name in team.player_names:
+            total_players += 1
+            if lookup is None:
+                result = ContactResolution(player_name=player_name, status="no_signup")
+            else:
+                result = lookup.resolve(player_name, signup_mode_name)
+
+            if result.qq:
+                filled_qq_count += 1
+            if result.status == "missing":
+                missing_contact_count += 1
+            if result.status == "conflict":
+                conflict_rows.append(
+                    {
+                        "对局ID": overview.match_id,
+                        "玩家昵称": player_name,
+                        "候选QQ": " / ".join(result.candidate_qqs),
+                        "采用QQ": result.qq,
+                        "冲突来源条数": str(len(result.candidate_qqs)),
+                        "最新提交时间": result.latest_submitted_at,
+                    }
+                )
+            players.append(result)
+        groups.append(
+            TeamParticipantGroup(
+                display_team_no=int(team.source_team_id or team.team_index),
+                players=players,
+            )
+        )
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "参赛者名单"
+
+    title = _build_sheet_title(overview)
+    if template_type_code == "solo":
+        _render_solo_sheet(worksheet, title, groups)
+    elif template_type_code == "multi":
+        _render_multi_team_sheet(worksheet, title, groups)
+    else:
+        _render_squad_sheet(worksheet, title, groups)
+
+    if conflict_rows:
+        _render_conflict_sheet(workbook.create_sheet("QQ冲突"), conflict_rows)
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return ParticipantListResult(
+        workbook_bytes=buffer.getvalue(),
+        template_type=template_type_label,
+        signup_mode_name=signup_mode_name,
+        total_players=total_players,
+        filled_qq_count=filled_qq_count,
+        missing_contact_count=missing_contact_count,
+        conflict_count=len(conflict_rows),
+        used_signup_sheet=signup_excel_bytes is not None,
+    )
+
+
+def _build_sheet_title(overview: MatchOverview) -> str:
+    """构造主工作表标题。"""
+    category = display_game_mode_category(overview.custom_match_category)
+    mode = display_game_mode(overview.game_mode)
+    mode_text = " ".join(part for part in (category, mode if mode and mode != "-" else "") if part)
+    if not mode_text:
+        mode_text = overview.game_mode or "对局"
+    return f"{overview.map_name} {mode_text} | {overview.match_id}"
+
+
+def _style_cell(
+    cell,
+    *,
+    value: Any = None,
+    font: Font | None = None,
+    fill: PatternFill | None = None,
+    border: Border | None = None,
+    alignment: Alignment | None = None,
+) -> None:
+    """统一设置单元格样式。"""
+    cell.value = value
+    if font is not None:
+        cell.font = copy(font)
+    if fill is not None:
+        cell.fill = copy(fill)
+    if border is not None:
+        cell.border = copy(border)
+    if alignment is not None:
+        cell.alignment = copy(alignment)
+
+
+def _apply_contact_fill(cell, status: str) -> None:
+    """按匹配状态给 QQ 单元格着色。"""
+    if status == "missing":
+        cell.fill = copy(MISSING_FILL)
+    elif status == "conflict":
+        cell.fill = copy(CONFLICT_FILL)
+
+
+def _write_qq_cell(cell, qq: str, status: str) -> None:
+    """按 Excel 友好的方式写入 QQ，避免“数字储存成文字”提示。"""
+    normalized = str(qq or "").strip()
+    if normalized.isdigit() and not (len(normalized) > 1 and normalized.startswith("0")):
+        cell.value = int(normalized)
+        cell.number_format = "0"
+    else:
+        cell.value = normalized
+        cell.number_format = "@"
+    _apply_contact_fill(cell, status)
+
+
+def _set_column_widths(ws: Worksheet, widths: dict[int, float]) -> None:
+    """批量设置列宽。"""
+    for col_idx, width in widths.items():
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+
+def _prepare_title(ws: Worksheet, title: str, start_col: int, end_col: int) -> None:
+    """写入顶部标题区。"""
+    ws.sheet_view.showGridLines = False
+    ws.merge_cells(start_row=1, start_column=start_col, end_row=5, end_column=end_col)
+    cell = ws.cell(1, start_col)
+    _style_cell(cell, value=title, font=TITLE_FONT, fill=TITLE_FILL, border=ALL_BORDER, alignment=CENTER)
+    for row in range(1, 6):
+        ws.row_dimensions[row].height = 24
+        for col in range(start_col, end_col + 1):
+            ws.cell(row, col).border = copy(ALL_BORDER)
+            if row > 1:
+                ws.cell(row, col).fill = copy(TITLE_FILL)
+
+
+def _render_squad_sheet(ws: Worksheet, title: str, groups: list[TeamParticipantGroup]) -> None:
+    """按四排模板渲染名单。"""
+    start_col = 3
+    teams_per_band = 4
+    end_col = start_col + teams_per_band * 2 - 1
+    _prepare_title(ws, title, start_col, end_col)
+    _set_column_widths(ws, {3: 13.0, 4: 10.5, 5: 13.0, 6: 10.5, 7: 13.0, 8: 10.5, 9: 13.0, 10: 10.5})
+
+    row_base = 6
+    band_height = 6
+    for band_index in range(ceil(len(groups) / teams_per_band)):
+        band = groups[band_index * teams_per_band : (band_index + 1) * teams_per_band]
+        for offset in range(teams_per_band):
+            col = start_col + offset * 2
+            team = band[offset] if offset < len(band) else None
+            ws.merge_cells(start_row=row_base, start_column=col, end_row=row_base, end_column=col + 1)
+            _style_cell(
+                ws.cell(row_base, col),
+                value=f"TEAM# {team.display_team_no}" if team else "",
+                font=WHITE_FONT,
+                fill=HEADER_FILL,
+                border=ALL_BORDER,
+                alignment=CENTER,
+            )
+            for title_offset, header in enumerate(("游戏ID", "QQ")):
+                _style_cell(
+                    ws.cell(row_base + 1, col + title_offset),
+                    value=header,
+                    font=WHITE_FONT,
+                    fill=HEADER_FILL,
+                    border=ALL_BORDER,
+                    alignment=CENTER,
+                )
+            for player_offset in range(4):
+                row = row_base + 2 + player_offset
+                player = team.players[player_offset] if team and player_offset < len(team.players) else None
+                _style_cell(
+                    ws.cell(row, col),
+                    value=player.player_name if player else "",
+                    font=DATA_FONT,
+                    border=ALL_BORDER,
+                    alignment=CENTER,
+                )
+                qq_cell = ws.cell(row, col + 1)
+                _style_cell(
+                    qq_cell,
+                    value="",
+                    font=DATA_FONT,
+                    border=ALL_BORDER,
+                    alignment=CENTER,
+                )
+                if player:
+                    _write_qq_cell(qq_cell, player.qq, player.status)
+        row_base += band_height
+
+
+def _render_solo_sheet(ws: Worksheet, title: str, groups: list[TeamParticipantGroup]) -> None:
+    """按单排模板渲染名单。"""
+    start_col = 3
+    blocks_per_row = 4
+    end_col = start_col + blocks_per_row * 3 - 1
+    _prepare_title(ws, title, start_col, end_col)
+    _set_column_widths(
+        ws,
+        {
+            3: 5.0,
+            4: 14.0,
+            5: 10.5,
+            6: 5.0,
+            7: 14.0,
+            8: 10.5,
+            9: 5.0,
+            10: 14.0,
+            11: 10.5,
+            12: 5.0,
+            13: 14.0,
+            14: 10.5,
+        },
+    )
+
+    row_base = 6
+    for offset in range(blocks_per_row):
+        col = start_col + offset * 3
+        for title_offset, header in enumerate(("队伍", "游戏ID", "QQ")):
+            _style_cell(
+                ws.cell(row_base, col + title_offset),
+                value=header,
+                font=WHITE_FONT,
+                fill=HEADER_FILL,
+                border=ALL_BORDER,
+                alignment=CENTER,
+            )
+
+    data_row = row_base + 1
+    for group_index in range(ceil(len(groups) / blocks_per_row)):
+        row = data_row + group_index
+        band = groups[group_index * blocks_per_row : (group_index + 1) * blocks_per_row]
+        for offset in range(blocks_per_row):
+            col = start_col + offset * 3
+            team = band[offset] if offset < len(band) else None
+            player = team.players[0] if team and team.players else None
+            _style_cell(
+                ws.cell(row, col),
+                value=team.display_team_no if team else "",
+                font=WHITE_FONT,
+                fill=INDEX_FILL,
+                border=ALL_BORDER,
+                alignment=CENTER,
+            )
+            _style_cell(
+                ws.cell(row, col + 1),
+                value=player.player_name if player else "",
+                font=DATA_FONT,
+                border=ALL_BORDER,
+                alignment=CENTER,
+            )
+            qq_cell = ws.cell(row, col + 2)
+            _style_cell(
+                qq_cell,
+                value="",
+                font=DATA_FONT,
+                border=ALL_BORDER,
+                alignment=CENTER,
+            )
+            if player:
+                _write_qq_cell(qq_cell, player.qq, player.status)
+
+
+def _render_multi_team_sheet(ws: Worksheet, title: str, groups: list[TeamParticipantGroup]) -> None:
+    """按 1 队 N 人模板渲染名单。"""
+    start_col = 3
+    teams_per_band = 3
+    end_col = start_col + teams_per_band * 3 - 1
+    _prepare_title(ws, title, start_col, end_col)
+    _set_column_widths(ws, {3: 5.0, 4: 14.0, 5: 10.5, 6: 5.0, 7: 14.0, 8: 10.5, 9: 5.0, 10: 14.0, 11: 10.5})
+
+    max_members = max((len(group.players) for group in groups), default=1)
+    row_base = 6
+    band_height = max_members + 3
+    for band_index in range(ceil(len(groups) / teams_per_band)):
+        band = groups[band_index * teams_per_band : (band_index + 1) * teams_per_band]
+        for offset in range(teams_per_band):
+            col = start_col + offset * 3
+            team = band[offset] if offset < len(band) else None
+            ws.merge_cells(start_row=row_base, start_column=col, end_row=row_base + 1, end_column=col + 2)
+            _style_cell(
+                ws.cell(row_base, col),
+                value=f"TEAM# {team.display_team_no}" if team else "",
+                font=WHITE_FONT,
+                fill=HEADER_FILL,
+                border=ALL_BORDER,
+                alignment=CENTER,
+            )
+            for row in (row_base, row_base + 1):
+                for current_col in range(col, col + 3):
+                    ws.cell(row, current_col).border = copy(ALL_BORDER)
+                    if row == row_base + 1:
+                        ws.cell(row, current_col).fill = copy(HEADER_FILL)
+            for title_offset, header in enumerate(("队内序号", "游戏ID", "QQ")):
+                _style_cell(
+                    ws.cell(row_base + 2, col + title_offset),
+                    value=header,
+                    font=WHITE_FONT,
+                    fill=HEADER_FILL,
+                    border=ALL_BORDER,
+                    alignment=CENTER,
+                )
+            for player_offset in range(max_members):
+                row = row_base + 3 + player_offset
+                player = team.players[player_offset] if team and player_offset < len(team.players) else None
+                index_cell = ws.cell(row, col)
+                _style_cell(
+                    index_cell,
+                    value=player_offset + 1 if player else "",
+                    font=WHITE_FONT if player else DATA_FONT,
+                    fill=INDEX_FILL if player else None,
+                    border=ALL_BORDER,
+                    alignment=CENTER,
+                )
+                _style_cell(
+                    ws.cell(row, col + 1),
+                    value=player.player_name if player else "",
+                    font=DATA_FONT,
+                    border=ALL_BORDER,
+                    alignment=CENTER,
+                )
+                qq_cell = ws.cell(row, col + 2)
+                _style_cell(
+                    qq_cell,
+                    value="",
+                    font=DATA_FONT,
+                    border=ALL_BORDER,
+                    alignment=CENTER,
+                )
+                if player:
+                    _write_qq_cell(qq_cell, player.qq, player.status)
+        row_base += band_height
+
+
+def _render_conflict_sheet(ws: Worksheet, rows: list[dict[str, str]]) -> None:
+    """渲染 QQ 冲突辅助工作表。"""
+    headers = ["对局ID", "玩家昵称", "候选QQ", "采用QQ", "冲突来源条数", "最新提交时间"]
+    ws.sheet_view.showGridLines = False
+    for col, header in enumerate(headers, start=1):
+        _style_cell(
+            ws.cell(1, col),
+            value=header,
+            font=WHITE_FONT,
+            fill=HEADER_FILL,
+            border=ALL_BORDER,
+            alignment=CENTER,
+        )
+    for row_idx, row_data in enumerate(rows, start=2):
+        for col_idx, header in enumerate(headers, start=1):
+            _style_cell(
+                ws.cell(row_idx, col_idx),
+                value=row_data.get(header, ""),
+                font=DATA_FONT,
+                border=ALL_BORDER,
+                alignment=CENTER,
+            )
+    widths = {1: 38.0, 2: 20.0, 3: 30.0, 4: 16.0, 5: 12.0, 6: 22.0}
+    _set_column_widths(ws, widths)
