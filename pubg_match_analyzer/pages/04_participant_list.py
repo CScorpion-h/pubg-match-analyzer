@@ -297,10 +297,27 @@ else:
         sync_batch_round_name(item.match_id, default_round_name)
 
     if st.button("批量生成参赛者名单", type="primary", use_container_width=True):
+        clear_generated_participant_batch()
         round_name_map = {
             item.match_id: st.session_state.participant_batch_round_name_map.get(item.match_id, f"第{index}局")
             for index, item in enumerate(selected_matches, start=1)
         }
+        progress_placeholder = st.empty()
+        status_placeholder = st.empty()
+        progress_bar = progress_placeholder.progress(0)
+
+        def update_progress(index: int, total: int, match_id: str, status: str) -> None:
+            round_name = round_name_map.get(match_id, f"第{index}局")
+            if status == "start":
+                progress_bar.progress((index - 1) / total)
+                status_placeholder.info(f"正在处理 {round_name} | {match_id}（{index}/{total}）")
+            elif status == "success":
+                progress_bar.progress(index / total)
+                status_placeholder.success(f"已完成 {round_name} | {match_id}（{index}/{total}）")
+            else:
+                progress_bar.progress(index / total)
+                status_placeholder.warning(f"处理失败 {round_name} | {match_id}（{index}/{total}）")
+
         try:
             client = PubgAPIClient(platform=st.session_state.platform, api_key=st.session_state.api_key)
             result = build_batch_participant_zip(
@@ -312,18 +329,25 @@ else:
                 round_name_map=round_name_map,
                 current_overview=overview,
                 current_teams=teams,
+                progress_callback=update_progress,
             )
         except (PubgAPIError, ValueError) as exc:
+            progress_placeholder.empty()
             st.error(f"批量生成失败：{exc}")
         else:
+            progress_bar.progress(1.0)
+            status_placeholder.success("批量生成已结束。")
             st.session_state.generated_participant_batch_zip_bytes = result.zip_bytes
             st.session_state.generated_participant_batch_zip_filename = result.zip_filename
             st.session_state.generated_participant_batch_summary = {
-                "match_count": result.match_count,
+                "requested_match_count": result.requested_match_count,
+                "generated_match_count": result.generated_match_count,
+                "failed_match_count": len(result.failed_matches),
                 "total_players": result.total_players,
                 "total_conflicts": result.total_conflicts,
                 "total_missing_contacts": result.total_missing_contacts,
                 "item_filenames": result.item_filenames,
+                "failed_matches": result.failed_matches,
                 "selected_match_ids": [item.match_id for item in selected_matches],
             }
             st.success("批量参赛者名单已生成。")
@@ -336,11 +360,18 @@ else:
     ):
         st.subheader("批量生成结果")
         result_col1, result_col2, result_col3, result_col4 = st.columns(4)
-        result_col1.metric("局数", batch_summary.get("match_count", 0))
-        result_col2.metric("总参赛人数", batch_summary.get("total_players", 0))
-        result_col3.metric("缺失联系方式", batch_summary.get("total_missing_contacts", 0))
-        result_col4.metric("QQ 冲突", batch_summary.get("total_conflicts", 0))
+        result_col1.metric("请求局数", batch_summary.get("requested_match_count", 0))
+        result_col2.metric("成功局数", batch_summary.get("generated_match_count", 0))
+        result_col3.metric("失败局数", batch_summary.get("failed_match_count", 0))
+        result_col4.metric("总参赛人数", batch_summary.get("total_players", 0))
+        extra_col1, extra_col2 = st.columns(2)
+        extra_col1.metric("缺失联系方式", batch_summary.get("total_missing_contacts", 0))
+        extra_col2.metric("QQ 冲突", batch_summary.get("total_conflicts", 0))
         st.caption("ZIP 内文件：" + "、".join(batch_summary.get("item_filenames", [])))
+        failed_matches = batch_summary.get("failed_matches", [])
+        if failed_matches:
+            st.warning("以下局次生成失败，未写入本次 ZIP：")
+            st.dataframe(failed_matches, use_container_width=True, hide_index=True)
         st.download_button(
             "下载批量参赛者名单 ZIP",
             data=st.session_state.generated_participant_batch_zip_bytes,

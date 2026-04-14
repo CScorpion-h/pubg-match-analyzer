@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from copy import copy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -87,11 +88,13 @@ class BatchParticipantListResult:
 
     zip_bytes: bytes
     zip_filename: str
-    match_count: int
+    requested_match_count: int
+    generated_match_count: int
     total_players: int
     total_conflicts: int
     total_missing_contacts: int
     item_filenames: list[str]
+    failed_matches: list[dict[str, str]]
 
 
 class SignupContactLookup:
@@ -269,6 +272,7 @@ def build_participant_list_workbook(
     teams: list[TeamSummary],
     signup_excel_bytes: bytes | None = None,
     signup_mode_name: str | None = None,
+    event_name: str | None = None,
     round_name: str | None = None,
 ) -> ParticipantListResult:
     """生成参赛者名单工作簿。"""
@@ -317,7 +321,7 @@ def build_participant_list_workbook(
     worksheet = workbook.active
     worksheet.title = "参赛者名单"
 
-    title = _build_sheet_title(overview, round_name=round_name)
+    title = _build_sheet_title(overview, event_name=event_name, round_name=round_name)
     if template_type_code == "solo":
         _render_solo_sheet(worksheet, title, groups)
     elif template_type_code == "multi":
@@ -342,14 +346,23 @@ def build_participant_list_workbook(
     )
 
 
-def _build_sheet_title(overview: MatchOverview, round_name: str | None = None) -> str:
+def _build_sheet_title(
+    overview: MatchOverview,
+    event_name: str | None = None,
+    round_name: str | None = None,
+) -> str:
     """构造主工作表标题。"""
     category = display_game_mode_category(overview.custom_match_category)
     mode = display_game_mode(overview.game_mode)
     mode_text = " ".join(part for part in (category, mode if mode and mode != "-" else "") if part)
     if not mode_text:
         mode_text = overview.game_mode or "对局"
+    event_text = sanitize_filename_part(event_name)
     round_text = sanitize_filename_part(round_name)
+    if event_text and round_text:
+        return f"{event_text} {round_text}"
+    if event_text:
+        return event_text
     if round_text:
         return f"{mode_text} {round_text}"
     return mode_text
@@ -687,50 +700,76 @@ def build_batch_participant_zip(
     round_name_map: dict[str, str],
     current_overview: MatchOverview | None = None,
     current_teams: list[TeamSummary] | None = None,
+    progress_callback: Callable[[int, int, str, str], None] | None = None,
 ) -> BatchParticipantListResult:
     """批量拉取多局数据并生成参赛名单 ZIP。"""
     if not match_ids:
         raise ValueError("至少选择一局才能批量生成。")
 
     item_filenames: list[str] = []
+    failed_matches: list[dict[str, str]] = []
     total_players = 0
     total_conflicts = 0
     total_missing_contacts = 0
     zip_buffer = BytesIO()
     with ZipFile(zip_buffer, mode="w", compression=ZIP_DEFLATED) as zf:
-        for match_id in match_ids:
-            if current_overview and current_overview.match_id == match_id and current_teams is not None:
-                overview = current_overview
-                teams = current_teams
-            else:
-                payload = client.get_match(match_id)
-                overview = build_match_overview(match_id, payload)
-                teams = extract_team_summaries(match_id, payload)
+        total = len(match_ids)
+        for index, match_id in enumerate(match_ids, start=1):
+            if progress_callback is not None:
+                progress_callback(index, total, match_id, "start")
+            try:
+                if current_overview and current_overview.match_id == match_id and current_teams is not None:
+                    overview = current_overview
+                    teams = current_teams
+                else:
+                    payload = client.get_match(match_id)
+                    overview = build_match_overview(match_id, payload)
+                    teams = extract_team_summaries(match_id, payload)
 
-            workbook_result = build_participant_list_workbook(
-                overview=overview,
-                teams=teams,
-                signup_excel_bytes=signup_excel_bytes,
-                signup_mode_name=signup_mode_name,
-                round_name=round_name_map.get(match_id),
-            )
-            file_name = build_participant_list_filename(
-                match_id=match_id,
-                event_name=event_name,
-                round_name=round_name_map.get(match_id),
-            )
-            zf.writestr(file_name, workbook_result.workbook_bytes)
-            item_filenames.append(file_name)
-            total_players += workbook_result.total_players
-            total_conflicts += workbook_result.conflict_count
-            total_missing_contacts += workbook_result.missing_contact_count
+                workbook_result = build_participant_list_workbook(
+                    overview=overview,
+                    teams=teams,
+                    signup_excel_bytes=signup_excel_bytes,
+                    signup_mode_name=signup_mode_name,
+                    event_name=event_name,
+                    round_name=round_name_map.get(match_id),
+                )
+                file_name = build_participant_list_filename(
+                    match_id=match_id,
+                    event_name=event_name,
+                    round_name=round_name_map.get(match_id),
+                )
+                zf.writestr(file_name, workbook_result.workbook_bytes)
+                item_filenames.append(file_name)
+                total_players += workbook_result.total_players
+                total_conflicts += workbook_result.conflict_count
+                total_missing_contacts += workbook_result.missing_contact_count
+            except Exception as exc:
+                failed_matches.append(
+                    {
+                        "match_id": match_id,
+                        "round_name": round_name_map.get(match_id, ""),
+                        "error": str(exc),
+                    }
+                )
+                if progress_callback is not None:
+                    progress_callback(index, total, match_id, "error")
+                continue
+
+            if progress_callback is not None:
+                progress_callback(index, total, match_id, "success")
+
+    if not item_filenames:
+        raise ValueError("所选对局全部生成失败，请检查 match_id、API Key 或网络请求状态。")
 
     return BatchParticipantListResult(
         zip_bytes=zip_buffer.getvalue(),
         zip_filename=build_batch_participant_zip_filename(event_name),
-        match_count=len(match_ids),
+        requested_match_count=len(match_ids),
+        generated_match_count=len(item_filenames),
         total_players=total_players,
         total_conflicts=total_conflicts,
         total_missing_contacts=total_missing_contacts,
         item_filenames=item_filenames,
+        failed_matches=failed_matches,
     )
