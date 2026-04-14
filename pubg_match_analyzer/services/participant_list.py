@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from copy import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
 from math import ceil
 from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pandas as pd
 from openpyxl import Workbook
@@ -17,6 +19,8 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from pubg_match_analyzer.core.constants import display_game_mode, display_game_mode_category
 from pubg_match_analyzer.core.models import MatchOverview, TeamSummary
+from pubg_match_analyzer.services.match_details import build_match_overview, extract_team_summaries
+from pubg_match_analyzer.services.pubg_api import PubgAPIClient
 
 THIN_SIDE = Side(style="thin", color="000000")
 ALL_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
@@ -75,6 +79,19 @@ class ParticipantListResult:
     missing_contact_count: int
     conflict_count: int
     used_signup_sheet: bool
+
+
+@dataclass
+class BatchParticipantListResult:
+    """批量参赛名单 ZIP 生成结果。"""
+
+    zip_bytes: bytes
+    zip_filename: str
+    match_count: int
+    total_players: int
+    total_conflicts: int
+    total_missing_contacts: int
+    item_filenames: list[str]
 
 
 class SignupContactLookup:
@@ -252,6 +269,7 @@ def build_participant_list_workbook(
     teams: list[TeamSummary],
     signup_excel_bytes: bytes | None = None,
     signup_mode_name: str | None = None,
+    round_name: str | None = None,
 ) -> ParticipantListResult:
     """生成参赛者名单工作簿。"""
     template_type_label, template_type_code = infer_participant_template(teams)
@@ -299,7 +317,7 @@ def build_participant_list_workbook(
     worksheet = workbook.active
     worksheet.title = "参赛者名单"
 
-    title = _build_sheet_title(overview)
+    title = _build_sheet_title(overview, round_name=round_name)
     if template_type_code == "solo":
         _render_solo_sheet(worksheet, title, groups)
     elif template_type_code == "multi":
@@ -324,14 +342,17 @@ def build_participant_list_workbook(
     )
 
 
-def _build_sheet_title(overview: MatchOverview) -> str:
+def _build_sheet_title(overview: MatchOverview, round_name: str | None = None) -> str:
     """构造主工作表标题。"""
     category = display_game_mode_category(overview.custom_match_category)
     mode = display_game_mode(overview.game_mode)
     mode_text = " ".join(part for part in (category, mode if mode and mode != "-" else "") if part)
     if not mode_text:
         mode_text = overview.game_mode or "对局"
-    return f"{overview.map_name} {mode_text} | {overview.match_id}"
+    round_text = sanitize_filename_part(round_name)
+    if round_text:
+        return f"{mode_text} {round_text}"
+    return mode_text
 
 
 def _style_cell(
@@ -618,3 +639,98 @@ def _render_conflict_sheet(ws: Worksheet, rows: list[dict[str, str]]) -> None:
             )
     widths = {1: 38.0, 2: 20.0, 3: 30.0, 4: 16.0, 5: 12.0, 6: 22.0}
     _set_column_widths(ws, widths)
+
+
+def sanitize_filename_part(value: str | None) -> str:
+    """清洗文件名片段，移除 Windows 非法字符。"""
+    if not value:
+        return ""
+    cleaned = re.sub(r'[<>:"/\\\\|?*]+', "_", str(value).strip())
+    return cleaned.strip(" ._")
+
+
+def build_participant_list_filename(
+    *,
+    match_id: str,
+    event_name: str | None = None,
+    round_name: str | None = None,
+) -> str:
+    """按当前规则生成单局参赛名单文件名。"""
+    event_part = sanitize_filename_part(event_name)
+    round_part = sanitize_filename_part(round_name)
+    match_part = sanitize_filename_part(match_id) or "match"
+    if event_part and round_part:
+        return f"{event_part}_{round_part}_参赛者名单.xlsx"
+    if event_part:
+        return f"{event_part}_{match_part}_参赛者名单.xlsx"
+    if round_part:
+        return f"{round_part}_{match_part}_参赛者名单.xlsx"
+    return f"{match_part}_参赛者名单.xlsx"
+
+
+def build_batch_participant_zip_filename(event_name: str | None = None, now: datetime | None = None) -> str:
+    """按当前规则生成批量 ZIP 文件名。"""
+    event_part = sanitize_filename_part(event_name)
+    if event_part:
+        return f"{event_part}_参赛者名单.zip"
+    current = now or datetime.now()
+    return f"参赛者名单_{current.strftime('%Y%m%d_%H%M%S')}.zip"
+
+
+def build_batch_participant_zip(
+    *,
+    client: PubgAPIClient,
+    match_ids: list[str],
+    signup_excel_bytes: bytes | None,
+    signup_mode_name: str | None,
+    event_name: str | None,
+    round_name_map: dict[str, str],
+    current_overview: MatchOverview | None = None,
+    current_teams: list[TeamSummary] | None = None,
+) -> BatchParticipantListResult:
+    """批量拉取多局数据并生成参赛名单 ZIP。"""
+    if not match_ids:
+        raise ValueError("至少选择一局才能批量生成。")
+
+    item_filenames: list[str] = []
+    total_players = 0
+    total_conflicts = 0
+    total_missing_contacts = 0
+    zip_buffer = BytesIO()
+    with ZipFile(zip_buffer, mode="w", compression=ZIP_DEFLATED) as zf:
+        for match_id in match_ids:
+            if current_overview and current_overview.match_id == match_id and current_teams is not None:
+                overview = current_overview
+                teams = current_teams
+            else:
+                payload = client.get_match(match_id)
+                overview = build_match_overview(match_id, payload)
+                teams = extract_team_summaries(match_id, payload)
+
+            workbook_result = build_participant_list_workbook(
+                overview=overview,
+                teams=teams,
+                signup_excel_bytes=signup_excel_bytes,
+                signup_mode_name=signup_mode_name,
+                round_name=round_name_map.get(match_id),
+            )
+            file_name = build_participant_list_filename(
+                match_id=match_id,
+                event_name=event_name,
+                round_name=round_name_map.get(match_id),
+            )
+            zf.writestr(file_name, workbook_result.workbook_bytes)
+            item_filenames.append(file_name)
+            total_players += workbook_result.total_players
+            total_conflicts += workbook_result.conflict_count
+            total_missing_contacts += workbook_result.missing_contact_count
+
+    return BatchParticipantListResult(
+        zip_bytes=zip_buffer.getvalue(),
+        zip_filename=build_batch_participant_zip_filename(event_name),
+        match_count=len(match_ids),
+        total_players=total_players,
+        total_conflicts=total_conflicts,
+        total_missing_contacts=total_missing_contacts,
+        item_filenames=item_filenames,
+    )

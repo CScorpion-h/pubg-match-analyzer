@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from pubg_match_analyzer.core.models import CandidateMatch
 from pubg_match_analyzer.core.constants import display_game_mode, display_game_mode_category
 from pubg_match_analyzer.services.export_service import candidate_matches_df
 from pubg_match_analyzer.services.match_details import (
@@ -13,7 +14,25 @@ from pubg_match_analyzer.services.match_details import (
 )
 from pubg_match_analyzer.services.pubg_api import PubgAPIClient, PubgAPIError
 from pubg_match_analyzer.ui.styles import apply_global_styles
-from pubg_match_analyzer.core.ui_state import ensure_session_state
+from pubg_match_analyzer.core.ui_state import ensure_session_state, merge_candidate_match_pool
+
+
+def build_candidate_pool_item(match_id: str, overview, matches: list[CandidateMatch]) -> CandidateMatch:
+    """把当前载入结果转换成可放入候选池的基础结构。"""
+    existing = next((item for item in matches if item.match_id == match_id), None)
+    if existing is not None:
+        return existing
+    return CandidateMatch(
+        match_id=overview.match_id,
+        started_at=overview.started_at,
+        map_name=overview.map_name,
+        game_mode=overview.game_mode,
+        player_count=overview.player_count,
+        hit_input_count=0,
+        hit_rate=0.0,
+        custom_match_category=overview.custom_match_category,
+        hit_input_names=[],
+    )
 
 
 ensure_session_state()
@@ -58,7 +77,10 @@ if st.button("载入对局", type="primary", use_container_width=True):
             st.session_state.selected_player_stats = players
             st.session_state.selected_team_summaries = teams
             st.session_state.selected_telemetry_url = overview.telemetry_url
-            st.success("对局数据已载入。")
+            pool_item = build_candidate_pool_item(target_match_id, overview, matches)
+            added_count, pool_size = merge_candidate_match_pool([pool_item])
+            action_text = "已加入候选池" if added_count else "候选池中已存在该对局"
+            st.success(f"对局数据已载入，{action_text}。候选池当前共 {pool_size} 局。")
 
 overview = st.session_state.selected_match_overview
 if overview:

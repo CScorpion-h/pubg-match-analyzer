@@ -9,7 +9,7 @@ from pubg_match_analyzer.services.export_service import candidate_matches_df
 from pubg_match_analyzer.services.match_detection import detect_candidate_matches
 from pubg_match_analyzer.services.pubg_api import PubgAPIClient, PubgAPIError
 from pubg_match_analyzer.ui.styles import apply_global_styles
-from pubg_match_analyzer.core.ui_state import clear_loaded_match, ensure_session_state
+from pubg_match_analyzer.core.ui_state import clear_loaded_match, ensure_session_state, merge_candidate_match_pool
 
 
 ensure_session_state()
@@ -49,16 +49,21 @@ if st.button("识别候选对局", type="primary", use_container_width=True):
         st.error(str(exc))
     else:
         st.session_state.candidate_matches = matches
+        added_count, pool_size = merge_candidate_match_pool(matches)
         clear_loaded_match()
-        st.success(f"识别完成，共得到 {len(matches)} 个自定义房候选对局。")
+        st.success(
+            f"识别完成，共得到 {len(matches)} 个自定义房候选对局；"
+            f"其中新增 {added_count} 个进入候选池，候选池当前共 {pool_size} 局。"
+        )
 
 matches = st.session_state.candidate_matches
+candidate_pool = st.session_state.candidate_match_pool
 hit_player_count = len({name for item in matches for name in item.hit_input_names})
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("候选对局数", len(matches))
 col2.metric("命中玩家数", hit_player_count)
 col3.metric("平台", st.session_state.platform)
-col4.metric("最近对局窗口", str(st.session_state.recent_match_limit))
+col4.metric("候选池局数", len(candidate_pool))
 
 if matches:
     st.dataframe(candidate_matches_df(matches), use_container_width=True, hide_index=True)

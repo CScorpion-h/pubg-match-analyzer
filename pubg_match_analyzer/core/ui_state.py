@@ -14,6 +14,7 @@ from pubg_match_analyzer.core.constants import (
     DEFAULT_RECENT_MATCH_LIMIT,
     MIN_HIT_PLAYER_COUNT,
 )
+from pubg_match_analyzer.core.models import CandidateMatch
 
 # 这些 key 对应页面上的 widget，需要在页面切换时保活。
 PERSISTED_WIDGET_KEYS = (
@@ -28,6 +29,9 @@ PERSISTED_WIDGET_KEYS = (
     "export_include_player_stats",
     "export_include_team_summary",
     "participant_signup_mode_select",
+    "participant_generation_mode",
+    "participant_batch_selected_ids",
+    "participant_batch_event_name",
 )
 
 LOCAL_SETTINGS_FILE = Path(__file__).resolve().parents[1] / "configs" / "local_settings.json"
@@ -109,6 +113,7 @@ def ensure_session_state() -> None:
         "min_hit_player_count": MIN_HIT_PLAYER_COUNT,
         "detect_input_text": "",
         "candidate_matches": [],
+        "candidate_match_pool": [],
         "selected_match_id": "",
         "selected_match_overview": None,
         "selected_player_stats": [],
@@ -136,6 +141,14 @@ def ensure_session_state() -> None:
         "cached_participant_signup_bytes": b"",
         "participant_signup_mode_select": "不指定（直接全表查找）",
         "participant_signup_uploader_nonce": 0,
+        "participant_generation_mode": "单局生成",
+        "participant_batch_selected_ids": [],
+        "participant_batch_event_name": "",
+        "participant_batch_round_name_map": {},
+        "participant_batch_round_name_manual": {},
+        "generated_participant_batch_zip_bytes": b"",
+        "generated_participant_batch_zip_filename": "",
+        "generated_participant_batch_summary": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -168,5 +181,39 @@ def clear_loaded_match() -> None:
     st.session_state.generated_participant_list_bytes = b""
     st.session_state.generated_participant_list_filename = ""
     st.session_state.generated_participant_list_summary = {}
+
+
+def clear_candidate_match_pool() -> None:
+    """清空跨识别轮次累积的候选对局池。"""
+    st.session_state.candidate_match_pool = []
+    st.session_state.participant_batch_selected_ids = []
+    st.session_state.participant_batch_round_name_map = {}
+    st.session_state.participant_batch_round_name_manual = {}
+    st.session_state.generated_participant_batch_zip_bytes = b""
+    st.session_state.generated_participant_batch_zip_filename = ""
+    st.session_state.generated_participant_batch_summary = {}
+
+
+def merge_candidate_match_pool(items: list[CandidateMatch]) -> tuple[int, int]:
+    """按 match_id 去重合并候选对局池，返回新增数和合并后总数。"""
+    existing: dict[str, CandidateMatch] = {
+        item.match_id: item for item in st.session_state.get("candidate_match_pool", [])
+    }
+    added_count = 0
+    for item in items:
+        current = existing.get(item.match_id)
+        if current is None:
+            existing[item.match_id] = item
+            added_count += 1
+            continue
+        if item.hit_input_count >= current.hit_input_count:
+            existing[item.match_id] = item
+
+    merged = sorted(existing.values(), key=lambda item: item.started_at)
+    st.session_state.candidate_match_pool = merged
+    st.session_state.generated_participant_batch_zip_bytes = b""
+    st.session_state.generated_participant_batch_zip_filename = ""
+    st.session_state.generated_participant_batch_summary = {}
+    return added_count, len(merged)
 
 
