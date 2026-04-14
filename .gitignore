@@ -20,9 +20,6 @@ configs/local_settings.json
 .env.*
 telemetry_exports/
 *_telemetry.json
-*_参赛者名单.xlsx
-模板案例.xlsx
-3月水友赛报名收集表（收集结果）.xlsx
 
 # Local design and planning materials
 proto_*.png

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import streamlit as st
 
-from pubg_match_analyzer.core.constants import display_game_mode, display_game_mode_category
+from pubg_match_analyzer.core.constants import (
+    display_game_mode,
+    display_game_mode_category,
+    format_duration_mmss,
+)
 from pubg_match_analyzer.services.export_service import player_stats_df, team_summary_df
 from pubg_match_analyzer.ui.styles import apply_global_styles
 from pubg_match_analyzer.core.ui_state import ensure_session_state
@@ -49,6 +53,9 @@ with tab1:
         ]
     # 当前页面固定是一局详情，重复显示同一个 match_id 没有额外信息价值。
     display_df = filtered.drop(columns=["对局ID"], errors="ignore")
+    if "存活时长" in display_df.columns:
+        display_df = display_df.copy()
+        display_df["存活时长"] = display_df["存活时长"].map(format_duration_mmss)
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 with tab2:

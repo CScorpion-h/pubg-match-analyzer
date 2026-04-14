@@ -194,3 +194,17 @@ def is_custom_match(match_type: str | None, is_custom_match_flag: bool | None = 
     return False
 
 
+def format_duration_mmss(seconds: int | float | None) -> str:
+    """把秒数格式化成“X分Y秒”展示。"""
+    if seconds is None:
+        return ""
+
+    try:
+        total_seconds = max(0, int(round(float(seconds))))
+    except (TypeError, ValueError):
+        return ""
+
+    minutes, remain_seconds = divmod(total_seconds, 60)
+    return f"{minutes}分{remain_seconds}秒"
+
+

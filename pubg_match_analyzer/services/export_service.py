@@ -15,6 +15,7 @@ from pubg_match_analyzer.core.constants import (
     TEAM_SUMMARY_COLUMN_LABELS,
     display_game_mode,
     display_game_mode_category,
+    format_duration_mmss,
 )
 from pubg_match_analyzer.core.models import CandidateMatch, MatchOverview, PlayerMatchStat, TeamSummary
 
@@ -74,6 +75,8 @@ def match_overview_df(item: MatchOverview | None) -> pd.DataFrame:
 def player_stats_df(items: list[PlayerMatchStat]) -> pd.DataFrame:
     """生成 PlayerStats 工作表。"""
     dataframe = pd.DataFrame([item.to_dict() for item in items])
+    if "time_survived" in dataframe.columns:
+        dataframe["time_survived"] = dataframe["time_survived"].map(format_duration_mmss)
     return _rename_columns(dataframe, PLAYER_STATS_COLUMN_LABELS)
 
 
