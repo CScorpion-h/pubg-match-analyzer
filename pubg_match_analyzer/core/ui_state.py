@@ -27,6 +27,7 @@ PERSISTED_WIDGET_KEYS = (
     "export_include_match_overview",
     "export_include_player_stats",
     "export_include_team_summary",
+    "participant_signup_mode_select",
 )
 
 LOCAL_SETTINGS_FILE = Path(__file__).resolve().parents[1] / "configs" / "local_settings.json"
@@ -131,6 +132,10 @@ def ensure_session_state() -> None:
         "generated_participant_list_bytes": b"",
         "generated_participant_list_filename": "",
         "generated_participant_list_summary": {},
+        "cached_participant_signup_filename": "",
+        "cached_participant_signup_bytes": b"",
+        "participant_signup_mode_select": "不指定（直接全表查找）",
+        "participant_signup_uploader_nonce": 0,
     }
     for key, value in defaults.items():
         if key not in st.session_state:

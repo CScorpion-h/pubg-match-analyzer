@@ -27,6 +27,26 @@ def clear_generated_participant_list() -> None:
     st.session_state.generated_participant_list_summary = {}
 
 
+def sync_signup_sheet_cache(uploader_key: str) -> tuple[str, bytes]:
+    """把当前上传的报名表同步到会话缓存，并返回可用缓存。"""
+    signup_file = st.session_state.get(uploader_key)
+    if signup_file is not None:
+        uploaded_bytes = signup_file.getvalue()
+        uploaded_name = signup_file.name
+        if (
+            st.session_state.cached_participant_signup_filename != uploaded_name
+            or st.session_state.cached_participant_signup_bytes != uploaded_bytes
+        ):
+            st.session_state.cached_participant_signup_filename = uploaded_name
+            st.session_state.cached_participant_signup_bytes = uploaded_bytes
+            clear_generated_participant_list()
+
+    return (
+        st.session_state.cached_participant_signup_filename,
+        st.session_state.cached_participant_signup_bytes,
+    )
+
+
 overview = st.session_state.selected_match_overview
 if not overview:
     clear_generated_participant_list()
@@ -51,20 +71,41 @@ col1.metric("队伍数", len(teams))
 col2.metric("最大队伍人数", max_team_size)
 col3.metric("模板类型", template_type)
 
-signup_file = st.file_uploader("上传报名表（可选）", type=["xlsx"], key="participant_signup_file")
+uploader_key = f"participant_signup_file_{st.session_state.participant_signup_uploader_nonce}"
+st.file_uploader("上传报名表（可选）", type=["xlsx"], key=uploader_key)
+cached_signup_name, cached_signup_bytes = sync_signup_sheet_cache(uploader_key)
+
 selected_signup_mode_name = ""
-if signup_file is None:
+if not cached_signup_bytes:
     st.info("未上传报名表时，仍会生成参赛名单，但 QQ 列会留空，且不会把空 QQ 标成缺失。")
 else:
-    st.caption(f"当前报名表：{signup_file.name}")
+    action_col, info_col = st.columns([1, 4])
+    with action_col:
+        if st.button("清除缓存报名表", use_container_width=True):
+            st.session_state.cached_participant_signup_filename = ""
+            st.session_state.cached_participant_signup_bytes = b""
+            st.session_state.participant_signup_mode_select = "不指定（直接全表查找）"
+            st.session_state.participant_signup_uploader_nonce += 1
+            clear_generated_participant_list()
+            st.rerun()
+    with info_col:
+        st.caption(f"当前缓存报名表：{cached_signup_name}")
+
     try:
-        signup_mode_options = extract_signup_mode_names(signup_file.getvalue())
+        signup_mode_options = extract_signup_mode_names(cached_signup_bytes)
     except Exception as exc:
         st.error(f"报名表玩法读取失败：{exc}")
         signup_mode_options = []
 
     mode_options = ["不指定（直接全表查找）"] + signup_mode_options
-    selected_mode = st.selectbox("报名表优先匹配玩法（可选）", options=mode_options, index=0)
+    if st.session_state.participant_signup_mode_select not in mode_options:
+        st.session_state.participant_signup_mode_select = mode_options[0]
+
+    selected_mode = st.selectbox(
+        "报名表优先匹配玩法（可选）",
+        options=mode_options,
+        key="participant_signup_mode_select",
+    )
     if selected_mode != mode_options[0]:
         selected_signup_mode_name = selected_mode
         st.caption(f"报名表匹配策略：优先按“{selected_signup_mode_name}”匹配，未命中时再全表兜底。")
@@ -76,7 +117,7 @@ if st.button("生成参赛者名单", type="primary", use_container_width=True):
         result = build_participant_list_workbook(
             overview=overview,
             teams=teams,
-            signup_excel_bytes=signup_file.getvalue() if signup_file is not None else None,
+            signup_excel_bytes=cached_signup_bytes or None,
             signup_mode_name=selected_signup_mode_name or None,
         )
     except Exception as exc:
