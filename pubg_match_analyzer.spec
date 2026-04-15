@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 
 project_dir = Path(SPECPATH).resolve()
@@ -12,11 +12,13 @@ datas = [
     (str(project_dir / "app.py"), "."),
     (str(project_dir / ".streamlit" / "config.toml"), ".streamlit"),
 ]
+datas += copy_metadata("streamlit")
+datas += collect_data_files("streamlit")
 for page_file in pages_dir.glob("*.py"):
     datas.append((str(page_file), "pubg_match_analyzer/pages"))
 
 hiddenimports = collect_submodules("pubg_match_analyzer")
-hiddenimports.append("streamlit.web.cli")
+hiddenimports += collect_submodules("streamlit")
 
 a = Analysis(
     ["launcher.py"],
@@ -41,7 +43,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
 )
 
@@ -50,7 +52,9 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="pubg_match_analyzer",
 )
+
+
