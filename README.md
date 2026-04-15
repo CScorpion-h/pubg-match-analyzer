@@ -1,14 +1,15 @@
-﻿# PUBG Match Analyzer
+# PUBG Match Analyzer
 
-一个基于 Streamlit 的 PUBG 对局分析工具，用于识别共同出现的自定义房对局、查看单场详情，并导出结果。
+一个基于 Streamlit 的 PUBG 自定义房工具，用于识别共同出现的对局、查看单场详情、生成参赛者名单，并导出结果。
 
 ## 当前功能
 
 - 根据玩家昵称识别共同出现的自定义房对局
 - 累积维护跨多轮识别的候选对局池，并支持在对局列表中手动补充 `match_id`
 - 查看单场对局的基础信息、玩家明细和队伍汇总
-- 基于 roster 生成参赛者名单，并支持复用当前会话中的报名表缓存
-- 支持在参赛者名单页面内切换“单局生成 / 批量生成”
+- 基于 `roster` 生成参赛者名单，支持单局和批量导出
+- 报名表支持自动结构识别与手动字段映射
+- 会话内缓存报名表及其字段映射
 - 导出 `对局概览`、`玩家明细`、`队伍汇总`
 - 本地自动保存基础设置：`API Key`、`平台`、`最近对局窗口`
 
@@ -18,30 +19,38 @@
 - 候选对局命中规则固定为：`至少 2 名输入玩家共同出现`
 - 自定义房判定优先使用 `matchType = custom`
 - `gameMode` 只用于分类和展示，不作为唯一保留条件
+- 参赛者名单中的队伍号使用 `teamId`
+- 参赛者名单中的队内序号使用 `roster.participants` 顺序
 
 ## 项目结构
 
 ```text
 pubg_match_analyzer/
 ├─ app.py
+├─ launcher.py
+├─ build_exe.ps1
+├─ pubg_match_analyzer.spec
+├─ requirements.txt
+├─ requirements-build.txt
 ├─ pubg_match_analyzer/
 │  ├─ configs/
 │  ├─ core/
 │  ├─ pages/
 │  ├─ services/
 │  └─ ui/
-├─ .streamlit/
-├─ README.md
-├─ GITHUB_UPLOAD_GUIDE.md
-└─ requirements.txt
+└─ .streamlit/
 ```
 
 目录说明：
+
 - `app.py`：Streamlit 入口
-- `pubg_match_analyzer/configs/`：本地配置与示例配置
+- `launcher.py`：EXE 打包入口
+- `build_exe.ps1`：PyInstaller 构建脚本
+- `pubg_match_analyzer.spec`：PyInstaller `onedir` 配置
+- `pubg_match_analyzer/configs/`：示例配置文件
 - `pubg_match_analyzer/core/`：常量、数据模型、会话状态
 - `pubg_match_analyzer/pages/`：页面脚本
-- `pubg_match_analyzer/services/`：PUBG API 读取、对局解析、导出逻辑
+- `pubg_match_analyzer/services/`：PUBG API 读取、对局解析、报名表映射、导出逻辑
 - `pubg_match_analyzer/ui/`：样式和界面辅助
 
 ## 运行方式
@@ -53,10 +62,49 @@ streamlit run app.py
 
 ## 本地配置
 
-程序运行时会自动生成本地配置文件：
-- `pubg_match_analyzer/configs/local_settings.json`
+程序运行时会自动在用户目录保存本地配置文件：
 
-本地配置文件用于保存：
+- `%APPDATA%\pubg_match_analyzer\local_settings.json`
+
+该文件用于保存：
+
 - `PUBG API Key`
 - `平台`
 - `最近对局窗口`
+
+
+
+## 报名表字段映射
+
+参赛者名单页面支持两种报名表结构：
+
+- 单人报名结构，例如 5 列的“本人游戏ID + QQ”
+- 组队报名结构，例如 12 列的“本人 + 队友1~3 游戏ID + QQ”
+
+上传报名表后：
+
+- 系统会先自动识别工作表、玩法列、提交时间列和联系人列组
+- 如果自动识别不稳，可切换到“手动调整字段映射”确认
+- 字段映射会在当前 Streamlit 会话内缓存，并随报名表缓存一起复用
+
+## EXE 打包
+
+安装构建依赖：
+
+```powershell
+pip install -r requirements-build.txt
+```
+
+构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
+```
+
+输出目录：
+
+- `dist\pubg_match_analyzer\`
+
+EXE 启动入口：
+
+- `dist\pubg_match_analyzer\pubg_match_analyzer.exe`

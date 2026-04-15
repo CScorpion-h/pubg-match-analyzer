@@ -1,11 +1,11 @@
-﻿"""系统设置页面。"""
+"""系统设置页面。"""
 
 from __future__ import annotations
 
 import streamlit as st
 
-from pubg_match_analyzer.ui.styles import apply_global_styles
 from pubg_match_analyzer.core.ui_state import LOCAL_SETTINGS_FILE, clear_local_settings, ensure_session_state
+from pubg_match_analyzer.ui.styles import apply_global_styles
 
 
 ensure_session_state()
@@ -36,13 +36,10 @@ with col2:
         key="recent_match_limit",
     )
 
-relative_settings_path = LOCAL_SETTINGS_FILE.relative_to(LOCAL_SETTINGS_FILE.parents[1])
-st.caption(f"本地保存路径：`{relative_settings_path}`")
+st.caption(f"本地保存路径：`{LOCAL_SETTINGS_FILE}`")
 
 if st.button("清除本地保存", use_container_width=True):
     clear_local_settings()
     st.info("本地保存已清除。当前会话中的值暂时保留，重启后不会再自动恢复。")
 
 st.success("设置会自动保存到本地。重启 Streamlit 后会自动恢复。")
-
-

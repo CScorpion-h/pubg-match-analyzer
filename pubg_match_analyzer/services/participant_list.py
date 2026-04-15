@@ -1,18 +1,17 @@
-﻿"""基于 roster 生成参赛者名单工作簿。"""
+"""基于 roster 生成参赛者名单工作簿。"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from math import ceil
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
-import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -22,6 +21,11 @@ from pubg_match_analyzer.core.constants import display_game_mode, display_game_m
 from pubg_match_analyzer.core.models import MatchOverview, TeamSummary
 from pubg_match_analyzer.services.match_details import build_match_overview, extract_team_summaries
 from pubg_match_analyzer.services.pubg_api import PubgAPIClient
+from pubg_match_analyzer.services.signup_mapping import (
+    ContactResolution,
+    SignupContactLookup,
+    SignupSheetSchema,
+)
 
 THIN_SIDE = Side(style="thin", color="000000")
 ALL_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
@@ -34,30 +38,6 @@ WHITE_FONT = Font(name="Microsoft YaHei", color="FFFFFF", bold=True)
 TITLE_FONT = Font(name="Microsoft YaHei", color="FFFFFF", bold=True, size=16)
 DATA_FONT = Font(name="Microsoft YaHei", color="000000")
 CENTER = Alignment(horizontal="center", vertical="center")
-PLACEHOLDER_VALUES = {"", "无须作答", "已删除", "没有", "无", "nan", "none", "null"}
-
-
-@dataclass
-class ContactRecord:
-    """报名表中的单条联系人记录。"""
-
-    mode_name: str
-    game_id: str
-    normalized_game_id: str
-    qq: str
-    submitted_at: datetime
-    submitted_at_text: str
-
-
-@dataclass
-class ContactResolution:
-    """某个参赛玩家的 QQ 匹配结果。"""
-
-    player_name: str
-    qq: str = ""
-    status: str = "no_signup"
-    candidate_qqs: list[str] = field(default_factory=list)
-    latest_submitted_at: str = ""
 
 
 @dataclass
@@ -97,144 +77,6 @@ class BatchParticipantListResult:
     failed_matches: list[dict[str, str]]
 
 
-class SignupContactLookup:
-    """对报名表联系人映射做标准化和查询。"""
-
-    def __init__(self, records: list[ContactRecord]):
-        self.records = records
-        self._global_by_id: dict[str, list[ContactRecord]] = {}
-        self._mode_by_id: dict[tuple[str, str], list[ContactRecord]] = {}
-        for record in records:
-            self._global_by_id.setdefault(record.normalized_game_id, []).append(record)
-            if record.mode_name:
-                self._mode_by_id.setdefault((record.mode_name, record.normalized_game_id), []).append(record)
-
-    @classmethod
-    def from_excel_bytes(cls, file_bytes: bytes) -> "SignupContactLookup":
-        """从报名表文件字节流中提取联系人映射。"""
-        dataframe = pd.read_excel(BytesIO(file_bytes))
-        if len(dataframe.columns) < 12:
-            raise ValueError("报名表列数不足，无法识别联系人信息。")
-
-        mode_col = dataframe.columns[2]
-        submitted_at_col = dataframe.columns[1]
-        id_qq_pairs = (
-            (dataframe.columns[3], dataframe.columns[4]),
-            (dataframe.columns[6], dataframe.columns[7]),
-            (dataframe.columns[8], dataframe.columns[9]),
-            (dataframe.columns[10], dataframe.columns[11]),
-        )
-
-        records: list[ContactRecord] = []
-        for _, row in dataframe.iterrows():
-            mode_name = _clean_text(row.get(mode_col))
-            if not mode_name:
-                continue
-
-            submitted_at_raw = row.get(submitted_at_col)
-            submitted_at = _to_datetime(submitted_at_raw)
-            submitted_at_text = _format_datetime(submitted_at)
-
-            for game_id_col, qq_col in id_qq_pairs:
-                game_id = _clean_text(row.get(game_id_col))
-                if not game_id:
-                    continue
-                qq = _clean_text(row.get(qq_col))
-                records.append(
-                    ContactRecord(
-                        mode_name=mode_name,
-                        game_id=game_id,
-                        normalized_game_id=_normalize_key(game_id),
-                        qq=qq,
-                        submitted_at=submitted_at,
-                        submitted_at_text=submitted_at_text,
-                    )
-                )
-
-        return cls(records)
-
-    def resolve(self, player_name: str, signup_mode_name: str | None) -> ContactResolution:
-        """按“玩法优先，全表兜底”的规则为玩家匹配 QQ。"""
-        normalized = _normalize_key(player_name)
-        if not normalized:
-            return ContactResolution(player_name=player_name, status="missing")
-
-        mode_records: list[ContactRecord] = []
-        if signup_mode_name:
-            mode_records = self._mode_by_id.get((signup_mode_name, normalized), [])
-        if mode_records:
-            return _resolve_from_records(player_name, mode_records)
-
-        global_records = self._global_by_id.get(normalized, [])
-        if global_records:
-            return _resolve_from_records(player_name, global_records)
-
-        return ContactResolution(player_name=player_name, status="missing")
-
-
-def _normalize_key(value: str | None) -> str:
-    """把游戏 ID 归一成可匹配的键。"""
-    if not value:
-        return ""
-    return str(value).strip().lower()
-
-
-def _clean_text(value: Any) -> str:
-    """清洗 Excel 单元格文本，过滤常见占位值。"""
-    if value is None or pd.isna(value):
-        return ""
-    raw = str(value).strip()
-    normalized = raw.replace(" ", "").lower()
-    if normalized in PLACEHOLDER_VALUES:
-        return ""
-    return raw
-
-
-def _to_datetime(value: Any) -> datetime:
-    """把 Excel 里的提交时间安全转换成 datetime。"""
-    if isinstance(value, datetime):
-        return value
-    try:
-        ts = pd.to_datetime(value)
-    except Exception:
-        return datetime.min
-    if pd.isna(ts):
-        return datetime.min
-    return ts.to_pydatetime()
-
-
-def _format_datetime(value: datetime) -> str:
-    """格式化时间用于冲突表展示。"""
-    if value == datetime.min:
-        return ""
-    return value.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _resolve_from_records(player_name: str, records: list[ContactRecord]) -> ContactResolution:
-    """从一组报名记录里解析最终联系人结果。"""
-    non_empty = [record for record in records if record.qq]
-    if not non_empty:
-        return ContactResolution(player_name=player_name, status="missing")
-
-    candidate_qqs = sorted({record.qq for record in non_empty})
-    latest_record = max(non_empty, key=lambda item: item.submitted_at)
-    if len(candidate_qqs) > 1:
-        return ContactResolution(
-            player_name=player_name,
-            qq=latest_record.qq,
-            status="conflict",
-            candidate_qqs=candidate_qqs,
-            latest_submitted_at=latest_record.submitted_at_text,
-        )
-
-    return ContactResolution(
-        player_name=player_name,
-        qq=latest_record.qq,
-        status="matched",
-        latest_submitted_at=latest_record.submitted_at_text,
-    )
-
-
 def infer_participant_template(teams: list[TeamSummary]) -> tuple[str, str]:
     """根据队伍人数结构推导名单模板类型。"""
     if not teams:
@@ -248,36 +90,21 @@ def infer_participant_template(teams: list[TeamSummary]) -> tuple[str, str]:
     return "四排模板", "squad"
 
 
-def extract_signup_mode_names(file_bytes: bytes) -> list[str]:
-    """从报名表中提取可供用户选择的玩法名称列表。"""
-    dataframe = pd.read_excel(BytesIO(file_bytes))
-    if len(dataframe.columns) < 3:
-        raise ValueError("报名表列数不足，无法识别玩法字段。")
-
-    mode_col = dataframe.columns[2]
-    values = []
-    seen: set[str] = set()
-    for value in dataframe[mode_col]:
-        mode_name = _clean_text(value)
-        if not mode_name or mode_name in seen:
-            continue
-        seen.add(mode_name)
-        values.append(mode_name)
-    return values
-
-
 def build_participant_list_workbook(
     *,
     overview: MatchOverview,
     teams: list[TeamSummary],
     signup_excel_bytes: bytes | None = None,
+    signup_sheet_schema: SignupSheetSchema | None = None,
     signup_mode_name: str | None = None,
     event_name: str | None = None,
     round_name: str | None = None,
 ) -> ParticipantListResult:
     """生成参赛者名单工作簿。"""
     template_type_label, template_type_code = infer_participant_template(teams)
-    lookup = SignupContactLookup.from_excel_bytes(signup_excel_bytes) if signup_excel_bytes else None
+    lookup = None
+    if signup_excel_bytes and signup_sheet_schema is not None:
+        lookup = SignupContactLookup.from_excel_bytes(signup_excel_bytes, signup_sheet_schema)
 
     groups: list[TeamParticipantGroup] = []
     total_players = 0
@@ -337,12 +164,12 @@ def build_participant_list_workbook(
     return ParticipantListResult(
         workbook_bytes=buffer.getvalue(),
         template_type=template_type_label,
-        signup_mode_name=signup_mode_name,
+        signup_mode_name=signup_mode_name or "",
         total_players=total_players,
         filled_qq_count=filled_qq_count,
         missing_contact_count=missing_contact_count,
         conflict_count=len(conflict_rows),
-        used_signup_sheet=signup_excel_bytes is not None,
+        used_signup_sheet=signup_excel_bytes is not None and signup_sheet_schema is not None,
     )
 
 
@@ -695,6 +522,7 @@ def build_batch_participant_zip(
     client: PubgAPIClient,
     match_ids: list[str],
     signup_excel_bytes: bytes | None,
+    signup_sheet_schema: SignupSheetSchema | None,
     signup_mode_name: str | None,
     event_name: str | None,
     round_name_map: dict[str, str],
@@ -730,6 +558,7 @@ def build_batch_participant_zip(
                     overview=overview,
                     teams=teams,
                     signup_excel_bytes=signup_excel_bytes,
+                    signup_sheet_schema=signup_sheet_schema,
                     signup_mode_name=signup_mode_name,
                     event_name=event_name,
                     round_name=round_name_map.get(match_id),

@@ -1,4 +1,4 @@
-﻿"""Streamlit 会话状态和本地配置持久化。"""
+"""Streamlit 会话状态和本地配置持久化。"""
 
 from __future__ import annotations
 
@@ -32,25 +32,21 @@ PERSISTED_WIDGET_KEYS = (
     "participant_generation_mode",
     "participant_batch_selected_ids",
     "participant_batch_event_name",
+    "participant_signup_manual_mapping",
+    "participant_signup_sheet_select",
+    "participant_signup_mode_col_select",
+    "participant_signup_submitted_at_col_select",
+    "participant_signup_contact_pair_count",
 )
 
-LOCAL_SETTINGS_FILE = Path(__file__).resolve().parents[1] / "configs" / "local_settings.json"
+APP_STORAGE_DIR = Path(os.getenv("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "pubg_match_analyzer"
+LOCAL_SETTINGS_FILE = APP_STORAGE_DIR / "local_settings.json"
+LEGACY_LOCAL_SETTINGS_FILE = Path(__file__).resolve().parents[1] / "configs" / "local_settings.json"
 LOCAL_SETTING_KEYS = ("api_key", "platform", "recent_match_limit")
 
 
-def _load_local_settings() -> dict[str, object]:
-    """从本地 JSON 读取可持久化设置。"""
-    if not LOCAL_SETTINGS_FILE.exists():
-        return {}
-
-    try:
-        raw = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-    if not isinstance(raw, dict):
-        return {}
-
+def _normalize_local_settings(raw: dict[str, object]) -> dict[str, object]:
+    """校验并规整本地配置内容。"""
     settings: dict[str, object] = {}
 
     api_key = raw.get("api_key")
@@ -72,9 +68,24 @@ def _load_local_settings() -> dict[str, object]:
     return settings
 
 
-def save_local_settings() -> None:
-    """把当前会话中的基础设置写回本地文件。"""
-    payload = {key: st.session_state.get(key) for key in LOCAL_SETTING_KEYS}
+def _load_json_settings(path: Path) -> dict[str, object]:
+    """从指定 JSON 文件中读取配置。"""
+    if not path.exists():
+        return {}
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    return _normalize_local_settings(raw)
+
+
+def _write_local_settings(payload: dict[str, object]) -> None:
+    """把基础设置写回新的用户目录配置文件。"""
     LOCAL_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     LOCAL_SETTINGS_FILE.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -82,10 +93,32 @@ def save_local_settings() -> None:
     )
 
 
+def _load_local_settings() -> dict[str, object]:
+    """从用户目录读取可持久化设置，并兼容旧路径迁移。"""
+    settings = _load_json_settings(LOCAL_SETTINGS_FILE)
+    if settings:
+        return settings
+
+    legacy_settings = _load_json_settings(LEGACY_LOCAL_SETTINGS_FILE)
+    if legacy_settings:
+        try:
+            _write_local_settings(legacy_settings)
+        except OSError:
+            pass
+    return legacy_settings
+
+
+def save_local_settings() -> None:
+    """把当前会话中的基础设置写回本地文件。"""
+    payload = {key: st.session_state.get(key) for key in LOCAL_SETTING_KEYS}
+    _write_local_settings(payload)
+
+
 def clear_local_settings() -> None:
     """删除本地保存的基础设置文件。"""
-    if LOCAL_SETTINGS_FILE.exists():
-        LOCAL_SETTINGS_FILE.unlink()
+    for path in (LOCAL_SETTINGS_FILE, LEGACY_LOCAL_SETTINGS_FILE):
+        if path.exists():
+            path.unlink()
 
 
 def sync_local_settings() -> None:
@@ -141,6 +174,13 @@ def ensure_session_state() -> None:
         "cached_participant_signup_bytes": b"",
         "participant_signup_mode_select": "不指定（直接全表查找）",
         "participant_signup_uploader_nonce": 0,
+        "participant_signup_schema_cache": {},
+        "participant_signup_schema_file_key": "",
+        "participant_signup_manual_mapping": False,
+        "participant_signup_sheet_select": "",
+        "participant_signup_mode_col_select": "不使用",
+        "participant_signup_submitted_at_col_select": "不使用",
+        "participant_signup_contact_pair_count": 1,
         "participant_generation_mode": "单局生成",
         "participant_batch_selected_ids": [],
         "participant_batch_event_name": "",
@@ -215,5 +255,3 @@ def merge_candidate_match_pool(items: list[CandidateMatch]) -> tuple[int, int]:
     st.session_state.generated_participant_batch_zip_filename = ""
     st.session_state.generated_participant_batch_summary = {}
     return added_count, len(merged)
-
-

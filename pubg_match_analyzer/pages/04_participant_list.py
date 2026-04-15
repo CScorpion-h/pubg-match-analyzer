@@ -1,22 +1,31 @@
-﻿"""参赛者名单页面，支持单局和批量生成。"""
+"""参赛者名单页面，支持单局和批量生成。"""
 
 from __future__ import annotations
 
+import json
+
 import streamlit as st
 
-from pubg_match_analyzer.core.ui_state import (
-    clear_candidate_match_pool,
-    ensure_session_state,
-)
+from pubg_match_analyzer.core.ui_state import clear_candidate_match_pool, ensure_session_state
 from pubg_match_analyzer.services.export_service import candidate_matches_df
 from pubg_match_analyzer.services.participant_list import (
     build_batch_participant_zip,
     build_participant_list_filename,
     build_participant_list_workbook,
-    extract_signup_mode_names,
     infer_participant_template,
 )
 from pubg_match_analyzer.services.pubg_api import PubgAPIClient, PubgAPIError
+from pubg_match_analyzer.services.signup_mapping import (
+    HEADER_OPTION_NONE,
+    MAX_MANUAL_SIGNUP_CONTACT_PAIRS,
+    SignupContactPair,
+    SignupSheetSchema,
+    build_signup_file_cache_key,
+    detect_signup_sheet_schema,
+    extract_signup_mode_names,
+    inspect_signup_workbook,
+    validate_signup_sheet_schema,
+)
 from pubg_match_analyzer.ui.styles import apply_global_styles
 
 
@@ -41,7 +50,41 @@ def clear_generated_participant_batch() -> None:
     st.session_state.generated_participant_batch_summary = {}
 
 
-def sync_signup_sheet_cache(uploader_key: str) -> tuple[str, bytes]:
+def clear_generated_participant_outputs() -> None:
+    """当报名表或字段映射变化时，清空所有已生成结果。"""
+    clear_generated_participant_list()
+    clear_generated_participant_batch()
+
+
+def get_signup_schema_cache_entry(file_key: str) -> dict[str, object] | None:
+    """读取当前文件对应的 schema 缓存。"""
+    cache = st.session_state.participant_signup_schema_cache
+    entry = cache.get(file_key)
+    return entry if isinstance(entry, dict) else None
+
+
+def set_signup_schema_cache_entry(file_key: str, schema: SignupSheetSchema, mapping_mode: str) -> None:
+    """写入当前文件对应的 schema 缓存。"""
+    cache = dict(st.session_state.participant_signup_schema_cache)
+    cache[file_key] = {
+        "schema": schema.to_dict(),
+        "mapping_mode": mapping_mode,
+    }
+    st.session_state.participant_signup_schema_cache = cache
+
+
+def ensure_option_state(key: str, default_value: str | int, options: list[str] | None = None) -> None:
+    """在 widget 渲染前确保 session_state 中的默认值可用。"""
+    current = st.session_state.get(key)
+    if options is None:
+        if current is None:
+            st.session_state[key] = default_value
+        return
+    if current not in options:
+        st.session_state[key] = default_value if default_value in options else options[0]
+
+
+def sync_signup_sheet_cache(uploader_key: str) -> tuple[str, bytes, str]:
     """把当前上传的报名表同步到会话缓存，并返回可用缓存。"""
     signup_file = st.session_state.get(uploader_key)
     if signup_file is not None:
@@ -53,36 +96,225 @@ def sync_signup_sheet_cache(uploader_key: str) -> tuple[str, bytes]:
         ):
             st.session_state.cached_participant_signup_filename = uploaded_name
             st.session_state.cached_participant_signup_bytes = uploaded_bytes
-            clear_generated_participant_list()
-            clear_generated_participant_batch()
+            st.session_state.participant_signup_mode_select = "不指定（直接全表查找）"
+            clear_generated_participant_outputs()
 
-    return (
-        st.session_state.cached_participant_signup_filename,
-        st.session_state.cached_participant_signup_bytes,
-    )
+    cached_signup_name = st.session_state.cached_participant_signup_filename
+    cached_signup_bytes = st.session_state.cached_participant_signup_bytes
+    if not cached_signup_name or not cached_signup_bytes:
+        st.session_state.participant_signup_schema_file_key = ""
+        st.session_state.participant_signup_manual_mapping = False
+        return "", b"", ""
+
+    file_key = build_signup_file_cache_key(cached_signup_name, cached_signup_bytes)
+    if st.session_state.participant_signup_schema_file_key != file_key:
+        st.session_state.participant_signup_schema_file_key = file_key
+        cache_entry = get_signup_schema_cache_entry(file_key)
+        st.session_state.participant_signup_manual_mapping = bool(
+            cache_entry and cache_entry.get("mapping_mode") == "manual"
+        )
+
+    return cached_signup_name, cached_signup_bytes, file_key
 
 
 def clear_signup_sheet_cache() -> None:
-    """清空报名表缓存和关联的玩法选择。"""
+    """清空报名表缓存和关联的字段映射状态。"""
     st.session_state.cached_participant_signup_filename = ""
     st.session_state.cached_participant_signup_bytes = b""
     st.session_state.participant_signup_mode_select = "不指定（直接全表查找）"
     st.session_state.participant_signup_uploader_nonce += 1
-    clear_generated_participant_list()
-    clear_generated_participant_batch()
+    st.session_state.participant_signup_schema_file_key = ""
+    st.session_state.participant_signup_manual_mapping = False
+    st.session_state.participant_signup_sheet_select = ""
+    st.session_state.participant_signup_mode_col_select = HEADER_OPTION_NONE
+    st.session_state.participant_signup_submitted_at_col_select = HEADER_OPTION_NONE
+    st.session_state.participant_signup_contact_pair_count = 1
+    for index in range(MAX_MANUAL_SIGNUP_CONTACT_PAIRS):
+        st.session_state.pop(f"participant_signup_game_id_col_{index}", None)
+        st.session_state.pop(f"participant_signup_qq_col_{index}", None)
+    clear_generated_participant_outputs()
 
 
-def render_signup_cache_section() -> tuple[bytes, str]:
-    """渲染报名表缓存上传区，返回缓存字节和当前优先玩法。"""
+def sync_participant_signup_signature(file_key: str, schema: SignupSheetSchema | None, signup_mode_name: str) -> None:
+    """当报名表映射或优先玩法变化时，主动清空旧生成结果。"""
+    schema_dict = schema.to_dict() if schema is not None else {}
+    signature = json.dumps(
+        {
+            "file_key": file_key,
+            "schema": schema_dict,
+            "signup_mode_name": signup_mode_name,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    if st.session_state.get("_participant_signup_signature") == signature:
+        return
+    clear_generated_participant_outputs()
+    st.session_state._participant_signup_signature = signature
+
+
+def render_manual_schema_editor(
+    workbook_sheets,
+    detection_schema: SignupSheetSchema,
+    cached_schema: SignupSheetSchema,
+) -> SignupSheetSchema | None:
+    """渲染手动字段映射区。"""
+    sheet_options = [sheet.sheet_name for sheet in workbook_sheets]
+    base_schema = cached_schema if cached_schema.sheet_name else detection_schema
+    default_sheet = base_schema.sheet_name or sheet_options[0]
+    ensure_option_state("participant_signup_sheet_select", default_sheet, sheet_options)
+    selected_sheet = st.selectbox("工作表", options=sheet_options, key="participant_signup_sheet_select")
+
+    selected_sheet_info = next(sheet for sheet in workbook_sheets if sheet.sheet_name == selected_sheet)
+    field_options = [HEADER_OPTION_NONE] + selected_sheet_info.columns
+
+    default_submitted_at = base_schema.submitted_at_col or HEADER_OPTION_NONE
+    default_mode_col = base_schema.mode_col or HEADER_OPTION_NONE
+    ensure_option_state("participant_signup_submitted_at_col_select", default_submitted_at, field_options)
+    ensure_option_state("participant_signup_mode_col_select", default_mode_col, field_options)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        submitted_at_value = st.selectbox(
+            "提交时间列（可选）",
+            options=field_options,
+            key="participant_signup_submitted_at_col_select",
+        )
+    with col2:
+        mode_col_value = st.selectbox(
+            "玩法列（可选）",
+            options=field_options,
+            key="participant_signup_mode_col_select",
+        )
+
+    pair_limit = max(1, min(MAX_MANUAL_SIGNUP_CONTACT_PAIRS, len(selected_sheet_info.columns)))
+    default_pair_count = min(max(1, len(base_schema.contact_pairs) or 1), pair_limit)
+    ensure_option_state("participant_signup_contact_pair_count", default_pair_count)
+    if not isinstance(st.session_state.participant_signup_contact_pair_count, int):
+        st.session_state.participant_signup_contact_pair_count = default_pair_count
+    st.session_state.participant_signup_contact_pair_count = min(
+        pair_limit,
+        max(1, int(st.session_state.participant_signup_contact_pair_count)),
+    )
+    pair_count = st.number_input(
+        "联系人列组数",
+        min_value=1,
+        max_value=pair_limit,
+        step=1,
+        key="participant_signup_contact_pair_count",
+    )
+
+    st.caption("每组联系人列都由“游戏ID列 + QQ列”组成。")
+    pairs: list[SignupContactPair] = []
+    has_incomplete_pair = False
+    for index in range(int(pair_count)):
+        default_pair = base_schema.contact_pairs[index] if index < len(base_schema.contact_pairs) else None
+        game_key = f"participant_signup_game_id_col_{index}"
+        qq_key = f"participant_signup_qq_col_{index}"
+        ensure_option_state(
+            game_key,
+            default_pair.game_id_col if default_pair else HEADER_OPTION_NONE,
+            field_options,
+        )
+        ensure_option_state(
+            qq_key,
+            default_pair.qq_col if default_pair else HEADER_OPTION_NONE,
+            field_options,
+        )
+        pair_col1, pair_col2 = st.columns(2)
+        with pair_col1:
+            game_id_col = st.selectbox(
+                f"第 {index + 1} 组 游戏ID列",
+                options=field_options,
+                key=game_key,
+            )
+        with pair_col2:
+            qq_col = st.selectbox(
+                f"第 {index + 1} 组 QQ列",
+                options=field_options,
+                key=qq_key,
+            )
+        if game_id_col == HEADER_OPTION_NONE and qq_col == HEADER_OPTION_NONE:
+            continue
+        if game_id_col == HEADER_OPTION_NONE or qq_col == HEADER_OPTION_NONE:
+            has_incomplete_pair = True
+            continue
+        pairs.append(SignupContactPair(game_id_col=game_id_col, qq_col=qq_col))
+
+    if has_incomplete_pair:
+        st.error("手动映射中存在未配完整的联系人列组，请同时指定游戏ID列和 QQ 列。")
+        return None
+
+    schema = SignupSheetSchema(
+        sheet_name=selected_sheet,
+        submitted_at_col="" if submitted_at_value == HEADER_OPTION_NONE else submitted_at_value,
+        mode_col="" if mode_col_value == HEADER_OPTION_NONE else mode_col_value,
+        contact_pairs=pairs,
+    )
+    try:
+        validate_signup_sheet_schema(schema, workbook_sheets)
+    except ValueError as exc:
+        st.error(f"当前字段映射无效：{exc}")
+        return None
+
+    return schema
+
+
+def render_signup_mapping_section(cached_signup_bytes: bytes, file_key: str) -> SignupSheetSchema | None:
+    """渲染报名表结构识别与字段映射。"""
+    workbook_sheets = inspect_signup_workbook(cached_signup_bytes)
+    detection = detect_signup_sheet_schema(cached_signup_bytes, workbook_sheets)
+    cache_entry = get_signup_schema_cache_entry(file_key)
+    if cache_entry is None:
+        set_signup_schema_cache_entry(file_key, detection.schema, "auto")
+        cache_entry = get_signup_schema_cache_entry(file_key)
+
+    cached_schema = SignupSheetSchema.from_dict(cache_entry.get("schema") if cache_entry else {})
+    default_manual = bool(cache_entry and cache_entry.get("mapping_mode") == "manual")
+
+    with st.expander("报名表结构识别 / 字段映射", expanded=detection.requires_manual_confirmation or default_manual):
+        st.caption(
+            f"自动识别结果：{detection.preset_name} | 工作表：{detection.matched_sheet_name} | "
+            f"联系人列组：{len(detection.schema.contact_pairs)} 组 | 置信度：{detection.confidence}"
+        )
+        if detection.requires_manual_confirmation:
+            st.warning("当前自动识别置信度较低，建议打开手动调整字段映射进行确认。")
+
+        manual_mapping = st.checkbox("手动调整字段映射", key="participant_signup_manual_mapping")
+        if manual_mapping:
+            active_schema = render_manual_schema_editor(workbook_sheets, detection.schema, cached_schema)
+            if active_schema is not None:
+                set_signup_schema_cache_entry(file_key, active_schema, "manual")
+                st.caption(
+                    f"当前使用手动映射：工作表 {active_schema.sheet_name} | 联系人列组 {len(active_schema.contact_pairs)} 组"
+                )
+            return active_schema
+
+        active_schema = detection.schema
+        try:
+            validate_signup_sheet_schema(active_schema, workbook_sheets)
+        except ValueError as exc:
+            st.error(f"自动识别的字段映射不可用：{exc}")
+            return None
+
+        set_signup_schema_cache_entry(file_key, active_schema, "auto")
+        st.caption(
+            f"当前使用自动识别映射：工作表 {active_schema.sheet_name} | 联系人列组 {len(active_schema.contact_pairs)} 组"
+        )
+        return active_schema
+
+
+def render_signup_cache_section() -> tuple[bytes, SignupSheetSchema | None, str]:
+    """渲染报名表缓存上传区，返回缓存字节、schema 和当前优先玩法。"""
     st.subheader("报名表缓存")
     uploader_key = f"participant_signup_file_{st.session_state.participant_signup_uploader_nonce}"
     st.file_uploader("上传报名表（可选）", type=["xlsx"], key=uploader_key)
-    cached_signup_name, cached_signup_bytes = sync_signup_sheet_cache(uploader_key)
+    cached_signup_name, cached_signup_bytes, file_key = sync_signup_sheet_cache(uploader_key)
 
-    selected_signup_mode_name = ""
     if not cached_signup_bytes:
+        sync_participant_signup_signature("", None, "")
         st.info("未上传报名表时，仍可生成参赛名单，但 QQ 列会留空，且不会把空 QQ 标成缺失。")
-        return b"", ""
+        return b"", None, ""
 
     action_col, info_col = st.columns([1, 4])
     with action_col:
@@ -93,12 +325,22 @@ def render_signup_cache_section() -> tuple[bytes, str]:
         st.caption(f"当前缓存报名表：{cached_signup_name}")
 
     try:
-        signup_mode_options = extract_signup_mode_names(cached_signup_bytes)
+        active_schema = render_signup_mapping_section(cached_signup_bytes, file_key)
     except Exception as exc:
-        st.error(f"报名表玩法读取失败：{exc}")
-        signup_mode_options = []
+        st.error(f"报名表结构读取失败：{exc}")
+        sync_participant_signup_signature(file_key, None, "")
+        return cached_signup_bytes, None, ""
 
-    mode_options = ["不指定（直接全表查找）"] + signup_mode_options
+    selected_signup_mode_name = ""
+    mode_options = ["不指定（直接全表查找）"]
+    if active_schema is not None:
+        try:
+            signup_mode_options = extract_signup_mode_names(cached_signup_bytes, active_schema)
+        except Exception as exc:
+            st.error(f"报名表玩法读取失败：{exc}")
+            signup_mode_options = []
+        mode_options.extend(signup_mode_options)
+
     if st.session_state.participant_signup_mode_select not in mode_options:
         st.session_state.participant_signup_mode_select = mode_options[0]
 
@@ -107,13 +349,21 @@ def render_signup_cache_section() -> tuple[bytes, str]:
         options=mode_options,
         key="participant_signup_mode_select",
     )
-    if selected_mode != mode_options[0]:
+    if active_schema is None:
+        st.warning("当前字段映射不可用，本次不会使用报名表补充 QQ。")
+        sync_participant_signup_signature(file_key, None, "")
+        return cached_signup_bytes, None, ""
+
+    if not active_schema.mode_col:
+        st.caption("当前映射未指定玩法列，将直接全表查找。")
+    elif selected_mode != mode_options[0]:
         selected_signup_mode_name = selected_mode
         st.caption(f"报名表匹配策略：优先按“{selected_signup_mode_name}”匹配，未命中时再全表兜底。")
     else:
         st.caption("报名表匹配策略：当前未指定优先玩法，将直接全表查找。")
 
-    return cached_signup_bytes, selected_signup_mode_name
+    sync_participant_signup_signature(file_key, active_schema, selected_signup_mode_name)
+    return cached_signup_bytes, active_schema, selected_signup_mode_name
 
 
 def round_name_widget_key(match_id: str) -> str:
@@ -133,7 +383,7 @@ def sync_batch_round_name(match_id: str, default_name: str) -> None:
     st.session_state.participant_batch_round_name_manual = round_name_manual
 
 
-signup_excel_bytes, selected_signup_mode_name = render_signup_cache_section()
+signup_excel_bytes, signup_sheet_schema, selected_signup_mode_name = render_signup_cache_section()
 st.divider()
 
 mode = st.radio(
@@ -176,6 +426,7 @@ if mode == "单局生成":
                 overview=overview,
                 teams=teams,
                 signup_excel_bytes=signup_excel_bytes or None,
+                signup_sheet_schema=signup_sheet_schema,
                 signup_mode_name=selected_signup_mode_name or None,
                 round_name=None,
             )
@@ -324,6 +575,7 @@ else:
                 client=client,
                 match_ids=[item.match_id for item in selected_matches],
                 signup_excel_bytes=signup_excel_bytes or None,
+                signup_sheet_schema=signup_sheet_schema,
                 signup_mode_name=selected_signup_mode_name or None,
                 event_name=st.session_state.participant_batch_event_name.strip(),
                 round_name_map=round_name_map,
