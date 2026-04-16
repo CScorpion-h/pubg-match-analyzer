@@ -12,6 +12,7 @@ import streamlit as st
 from pubg_match_analyzer.core.constants import (
     DEFAULT_PLATFORM,
     DEFAULT_RECENT_MATCH_LIMIT,
+    MAX_SEARCH_WINDOW_LIMIT,
     MIN_HIT_PLAYER_COUNT,
 )
 from pubg_match_analyzer.core.models import CandidateMatch
@@ -63,7 +64,7 @@ def _normalize_local_settings(raw: dict[str, object]) -> dict[str, object]:
     except (TypeError, ValueError):
         recent_match_limit = None
     if recent_match_limit is not None:
-        settings["recent_match_limit"] = min(100, max(5, recent_match_limit))
+        settings["recent_match_limit"] = min(MAX_SEARCH_WINDOW_LIMIT, max(5, recent_match_limit))
 
     return settings
 

@@ -57,9 +57,13 @@ class PubgAPIClient:
 
     def get_recent_match_ids(self, player_name: str, limit: int) -> list[str]:
         """读取指定玩家最近的 match_id 列表。"""
+        return self.get_all_match_ids(player_name)[:limit]
+
+    def get_all_match_ids(self, player_name: str) -> list[str]:
+        """读取指定玩家当前可返回的完整 recent matches 列表。"""
         player = self.get_player_by_name(player_name)
         relationships = player.get("relationships") or {}
-        matches = ((relationships.get("matches") or {}).get("data") or [])[:limit]
+        matches = ((relationships.get("matches") or {}).get("data") or [])
         return [item["id"] for item in matches if isinstance(item, dict) and item.get("id")]
 
     def get_match(self, match_id: str) -> dict[str, Any]:

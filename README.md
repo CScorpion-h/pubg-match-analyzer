@@ -5,13 +5,13 @@
 ## 当前功能
 
 - 根据玩家昵称识别共同出现的自定义房对局
-- 累积维护跨多轮识别的候选对局池，并支持在对局列表中手动补充 `match_id`
+- 累积维护跨多轮识别的候选对局池，并支持在对局列表中手动补入 `match_id`
 - 查看单场对局的基础信息、玩家明细和队伍汇总
 - 基于 `roster` 生成参赛者名单，支持单局和批量导出
 - 报名表支持自动结构识别与手动字段映射
 - 会话内缓存报名表及其字段映射
 - 导出 `对局概览`、`玩家明细`、`队伍汇总`
-- 本地自动保存基础设置：`API Key`、`平台`、`最近对局窗口`
+- 本地自动保存基础设置：`API Key`、`平台`、`最大搜索窗口`
 
 ## 当前规则
 
@@ -19,6 +19,8 @@
 - 候选对局命中规则固定为：`至少 2 名输入玩家共同出现`
 - 自定义房判定优先使用 `matchType = custom`
 - `gameMode` 只用于分类和展示，不作为唯一保留条件
+- 对局识别会自动选择 `recent matches` 总量最少的玩家作为锚点
+- 系统会在锚点玩家的最近 `N` 局范围内识别共同对局，其中 `N` 为“最大搜索窗口”
 - 参赛者名单中的队伍号使用 `teamId`
 - 参赛者名单中的队内序号使用 `roster.participants` 顺序
 
@@ -44,13 +46,13 @@ pubg_match_analyzer/
 目录说明：
 
 - `app.py`：Streamlit 入口
-- `launcher.py`：EXE 打包入口
+- `launcher.py`：EXE 启动入口与控制窗口
 - `build_exe.ps1`：PyInstaller 构建脚本
 - `pubg_match_analyzer.spec`：PyInstaller `onedir` 配置
 - `pubg_match_analyzer/configs/`：示例配置文件
 - `pubg_match_analyzer/core/`：常量、数据模型、会话状态
 - `pubg_match_analyzer/pages/`：页面脚本
-- `pubg_match_analyzer/services/`：PUBG API 读取、对局解析、报名表映射、导出逻辑
+- `pubg_match_analyzer/services/`：PUBG API、对局解析、报名表映射、导出逻辑
 - `pubg_match_analyzer/ui/`：样式和界面辅助
 
 ## 运行方式
@@ -70,9 +72,7 @@ streamlit run app.py
 
 - `PUBG API Key`
 - `平台`
-- `最近对局窗口`
-
-
+- `最大搜索窗口`
 
 ## 报名表字段映射
 
@@ -108,3 +108,9 @@ powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
 EXE 启动入口：
 
 - `dist\pubg_match_analyzer\pubg_match_analyzer.exe`
+
+说明：
+
+- EXE 启动后会弹出一个小控制窗口
+- 控制窗口可重新打开浏览器页面，也可正常关闭本地服务
+- 默认访问地址为 `http://127.0.0.1:8501/`

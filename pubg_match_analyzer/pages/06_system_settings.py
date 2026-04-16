@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from pubg_match_analyzer.core.constants import MAX_SEARCH_WINDOW_LIMIT
 from pubg_match_analyzer.core.ui_state import LOCAL_SETTINGS_FILE, clear_local_settings, ensure_session_state
 from pubg_match_analyzer.ui.styles import apply_global_styles
 
@@ -26,14 +27,15 @@ with col1:
     st.text_input(
         "平台",
         key="platform",
-        help="默认使用 steam，需要时也可以填写 psn、xbox、tournament 等平台标识。",
+        help="默认使用 steam，需要时也可填写 psn、xbox、tournament 等平台标识。",
     )
 with col2:
     st.number_input(
-        "默认最近对局窗口",
+        "默认最大搜索窗口",
         min_value=5,
-        max_value=100,
+        max_value=MAX_SEARCH_WINDOW_LIMIT,
         key="recent_match_limit",
+        help="系统会自动选择 recent matches 总量最少的玩家作为锚点，并在该玩家的最近 N 局范围内查找共同对局。",
     )
 
 st.caption(f"本地保存路径：`{LOCAL_SETTINGS_FILE}`")

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 
 DEFAULT_PLATFORM = "steam"
-DEFAULT_RECENT_MATCH_LIMIT = 30
+DEFAULT_RECENT_MATCH_LIMIT = 100
+MAX_SEARCH_WINDOW_LIMIT = 1000
+SEARCH_WINDOW_STEP = 50
 MIN_HIT_PLAYER_COUNT = 2
 
 # 这些前缀用于从 gameMode 中识别常见自定义房分类。
