@@ -116,7 +116,7 @@ class LauncherWindow:
 
         self.root = tk.Tk()
         self.root.title("PUBG Match Analyzer")
-        self.root.geometry("460x220")
+        self.root.geometry("480x255")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -128,9 +128,15 @@ class LauncherWindow:
         self.status_var = tk.StringVar(value="正在启动服务...")
         self.url_var = tk.StringVar(value="http://127.0.0.1:8501/")
 
-        ttk.Label(frame, textvariable=self.status_var, font=("Microsoft YaHei", 11)).pack(anchor="w", pady=(12, 8))
+        ttk.Label(
+            frame,
+            textvariable=self.status_var,
+            font=("Microsoft YaHei", 11),
+            wraplength=430,
+            justify="left",
+        ).pack(anchor="w", pady=(12, 8))
         ttk.Label(frame, text="访问地址", font=("Microsoft YaHei", 10)).pack(anchor="w")
-        ttk.Entry(frame, textvariable=self.url_var, state="readonly", width=52).pack(fill="x", pady=(4, 12))
+        ttk.Entry(frame, textvariable=self.url_var, state="readonly", width=54).pack(fill="x", pady=(4, 12))
 
         button_row = ttk.Frame(frame)
         button_row.pack(fill="x")
@@ -141,10 +147,12 @@ class LauncherWindow:
 
         ttk.Label(
             frame,
-            text="关闭此窗口会同时停止本地服务。",
+            text="关闭此窗口的同时，会停止本地服务。",
             font=("Microsoft YaHei", 9),
             foreground="#666666",
-        ).pack(anchor="w", pady=(14, 0))
+            wraplength=430,
+            justify="left",
+        ).pack(anchor="w", pady=(16, 0))
 
     def open_browser(self) -> None:
         webbrowser.open(self.url_var.get())
