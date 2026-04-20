@@ -26,14 +26,13 @@ from pubg_match_analyzer.services.signup_mapping import (
     inspect_signup_workbook,
     validate_signup_sheet_schema,
 )
+from pubg_match_analyzer.ui.components import render_page_header
 from pubg_match_analyzer.ui.styles import apply_global_styles
 
 
 ensure_session_state()
 apply_global_styles()
-st.title("参赛者名单")
-st.caption("基于对局 roster 生成参赛名单，可按单局生成，也可对候选对局池做批量生成。")
-
+render_page_header("参赛者名单", "基于当前已载入对局的 roster 生成参赛名单，可按单局生成，也可对候选对局池做批量生成。")
 
 def clear_generated_participant_list() -> None:
     """清空当前会话中的单局参赛名单生成缓存。"""

@@ -5,15 +5,15 @@ from __future__ import annotations
 import streamlit as st
 
 from pubg_match_analyzer.core.constants import EXPORT_SHEET_LABELS
-from pubg_match_analyzer.services.export_service import build_csv_zip_bytes, build_excel_bytes
-from pubg_match_analyzer.ui.styles import apply_global_styles
 from pubg_match_analyzer.core.ui_state import ensure_session_state
+from pubg_match_analyzer.services.export_service import build_csv_zip_bytes, build_excel_bytes
+from pubg_match_analyzer.ui.components import render_empty_state, render_info_banner, render_page_header
+from pubg_match_analyzer.ui.styles import apply_global_styles
 
 
 ensure_session_state()
 apply_global_styles()
-st.title("导出中心")
-st.caption("先勾选导出内容，再点击“生成导出文件”。生成完成后才会显示下载按钮。")
+render_page_header("导出中心", "先勾选导出内容，再生成文件；生成完成后才会显示下载按钮。")
 
 
 def clear_generated_export() -> None:
@@ -27,13 +27,10 @@ def clear_generated_export() -> None:
 overview = st.session_state.selected_match_overview
 if not overview:
     clear_generated_export()
-    st.info("请先载入一个对局。")
+    render_empty_state("请先载入一个对局。")
     st.stop()
 
-if (
-    st.session_state.generated_export_match_id
-    and st.session_state.generated_export_match_id != overview.match_id
-):
+if st.session_state.generated_export_match_id and st.session_state.generated_export_match_id != overview.match_id:
     clear_generated_export()
 
 with st.form("export_form"):
@@ -51,7 +48,7 @@ if st.session_state.export_include_player_stats:
 if st.session_state.export_include_team_summary:
     selected_sheets.append(EXPORT_SHEET_LABELS["team_summary"])
 
-st.info("修改勾选项后，需要重新点击一次“生成导出文件”。仅切换勾选项不会自动下载。")
+render_info_banner("修改勾选项后，需要重新点击一次“生成导出文件”。仅切换勾选项不会自动下载。", tone="info")
 
 if generate:
     if not selected_sheets:
@@ -82,10 +79,7 @@ if generate:
 
 base_name = f"{overview.match_id}_{overview.game_mode}".replace("/", "_").replace(" ", "_")
 
-if (
-    st.session_state.generated_export_match_id == overview.match_id
-    and st.session_state.generated_export_sheet_names
-):
+if st.session_state.generated_export_match_id == overview.match_id and st.session_state.generated_export_sheet_names:
     st.subheader("导出结果")
     st.write("当前包含：" + "、".join(st.session_state.generated_export_sheet_names))
 
@@ -110,5 +104,3 @@ if (
             key="download_csv_zip_button",
             on_click="ignore",
         )
-
-

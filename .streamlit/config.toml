@@ -1,5 +1,9 @@
 [theme]
-base = "light"
+base = "dark"
+backgroundColor = "#070d18"
+secondaryBackgroundColor = "#0d1828"
+textColor = "#c3d8f5"
+primaryColor = "#4a8fd4"
 font = "Microsoft YaHei"
 headingFont = "Microsoft YaHei"
 codeFont = "Microsoft YaHei"

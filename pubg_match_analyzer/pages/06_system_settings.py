@@ -1,4 +1,4 @@
-"""系统设置页面。"""
+﻿"""系统设置页面。"""
 
 from __future__ import annotations
 
@@ -6,14 +6,13 @@ import streamlit as st
 
 from pubg_match_analyzer.core.constants import MAX_SEARCH_WINDOW_LIMIT
 from pubg_match_analyzer.core.ui_state import LOCAL_SETTINGS_FILE, clear_local_settings, ensure_session_state
+from pubg_match_analyzer.ui.components import render_info_banner, render_page_header
 from pubg_match_analyzer.ui.styles import apply_global_styles
 
 
 ensure_session_state()
 apply_global_styles()
-
-st.title("系统设置")
-st.caption("当前页面只保留基础查询设置，改动会自动保存到本地。")
+render_page_header("系统设置", "当前页面只保留基础查询设置，改动会自动保存到本地。")
 
 st.text_input(
     "PUBG API Key",
@@ -42,6 +41,6 @@ st.caption(f"本地保存路径：`{LOCAL_SETTINGS_FILE}`")
 
 if st.button("清除本地保存", use_container_width=True):
     clear_local_settings()
-    st.info("本地保存已清除。当前会话中的值暂时保留，重启后不会再自动恢复。")
+    render_info_banner("本地保存已清除。当前会话中的值暂时保留，重启后不会再自动恢复。", tone="danger")
 
-st.success("设置会自动保存到本地。重启 Streamlit 后会自动恢复。")
+render_info_banner("设置会自动保存到本地。重启 Streamlit 后会自动恢复。", tone="success")

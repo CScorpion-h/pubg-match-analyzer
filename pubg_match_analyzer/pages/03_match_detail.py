@@ -4,23 +4,20 @@ from __future__ import annotations
 
 import streamlit as st
 
-from pubg_match_analyzer.core.constants import (
-    display_game_mode,
-    display_game_mode_category,
-    format_duration_mmss,
-)
-from pubg_match_analyzer.services.export_service import player_stats_df, team_summary_df
-from pubg_match_analyzer.ui.styles import apply_global_styles
+from pubg_match_analyzer.core.constants import display_game_mode, display_game_mode_category, format_duration_mmss
 from pubg_match_analyzer.core.ui_state import ensure_session_state
+from pubg_match_analyzer.services.export_service import player_stats_df, team_summary_df
+from pubg_match_analyzer.ui.components import render_empty_state, render_page_header
+from pubg_match_analyzer.ui.styles import apply_global_styles
 
 
 ensure_session_state()
 apply_global_styles()
-st.title("对局详情")
+render_page_header("对局详情", "查看当前已载入对局的摘要指标、玩家明细和队伍汇总。")
 
 overview = st.session_state.selected_match_overview
 if not overview:
-    st.info("请先在“对局列表”里载入一个对局。")
+    render_empty_state("请先在“对局列表”里载入一个对局。")
     st.stop()
 
 players = st.session_state.selected_player_stats
@@ -51,7 +48,6 @@ with tab1:
                 na=False,
             )
         ]
-    # 当前页面固定是一局详情，重复显示同一个 match_id 没有额外信息价值。
     display_df = filtered.drop(columns=["对局ID"], errors="ignore")
     if "存活时长" in display_df.columns:
         display_df = display_df.copy()
@@ -63,5 +59,3 @@ with tab2:
 
 with st.expander("原始对局信息"):
     st.json(overview.to_dict(), expanded=False)
-
-
