@@ -16,6 +16,7 @@ from pubg_match_analyzer.core.constants import (
     display_game_mode,
     display_game_mode_category,
     format_duration_mmss,
+    to_display_team_no,
 )
 from pubg_match_analyzer.core.models import CandidateMatch, MatchOverview, PlayerMatchStat, TeamSummary
 
@@ -75,6 +76,26 @@ def match_overview_df(item: MatchOverview | None) -> pd.DataFrame:
 def player_stats_df(items: list[PlayerMatchStat]) -> pd.DataFrame:
     """生成 PlayerStats 工作表。"""
     dataframe = pd.DataFrame([item.to_dict() for item in items])
+    if not dataframe.empty:
+        dataframe["team_no"] = dataframe.apply(
+            lambda row: to_display_team_no(row.get("source_team_id"), row.get("team_index")),
+            axis=1,
+        )
+        dataframe = dataframe.drop(columns=["team_index", "source_team_id"], errors="ignore")
+        ordered_columns = [
+            "match_id",
+            "player_name",
+            "player_account_id",
+            "team_no",
+            "placement",
+            "kills",
+            "assists",
+            "damage_dealt",
+            "time_survived",
+            "dbnos",
+            "headshot_kills",
+        ]
+        dataframe = dataframe[[column for column in ordered_columns if column in dataframe.columns]]
     if "time_survived" in dataframe.columns:
         dataframe["time_survived"] = dataframe["time_survived"].map(format_duration_mmss)
     return _rename_columns(dataframe, PLAYER_STATS_COLUMN_LABELS)
@@ -83,6 +104,23 @@ def player_stats_df(items: list[PlayerMatchStat]) -> pd.DataFrame:
 def team_summary_df(items: list[TeamSummary]) -> pd.DataFrame:
     """生成 TeamSummary 工作表。"""
     dataframe = pd.DataFrame([item.to_dict() for item in items])
+    if not dataframe.empty:
+        dataframe["team_no"] = dataframe.apply(
+            lambda row: to_display_team_no(row.get("source_team_id"), row.get("team_index")),
+            axis=1,
+        )
+        dataframe = dataframe.drop(columns=["team_index", "source_team_id"], errors="ignore")
+        ordered_columns = [
+            "match_id",
+            "team_no",
+            "rank",
+            "won",
+            "player_count",
+            "player_names",
+            "total_kills",
+            "total_damage",
+        ]
+        dataframe = dataframe[[column for column in ordered_columns if column in dataframe.columns]]
     if "won" in dataframe.columns:
         dataframe["won"] = dataframe["won"].map(lambda value: "是" if value else "否")
     return _rename_columns(dataframe, TEAM_SUMMARY_COLUMN_LABELS)

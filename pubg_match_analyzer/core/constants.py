@@ -85,8 +85,7 @@ PLAYER_STATS_COLUMN_LABELS = {
     "match_id": "对局ID",
     "player_name": "玩家昵称",
     "player_account_id": "玩家账号ID",
-    "team_index": "队伍序号",
-    "source_team_id": "原始队伍ID",
+    "team_no": "队伍序号",
     "placement": "名次",
     "kills": "淘汰",
     "assists": "助攻",
@@ -98,8 +97,7 @@ PLAYER_STATS_COLUMN_LABELS = {
 
 TEAM_SUMMARY_COLUMN_LABELS = {
     "match_id": "对局ID",
-    "team_index": "队伍序号",
-    "source_team_id": "原始队伍ID",
+    "team_no": "队伍序号",
     "rank": "队伍排名",
     "won": "是否获胜",
     "player_count": "队员人数",
@@ -113,6 +111,8 @@ EXPORT_SHEET_LABELS = {
     "player_stats": "玩家明细",
     "team_summary": "队伍汇总",
 }
+
+PUBG_TEAM_ID_OFFSET = 99999
 
 
 def normalize_player_name(name: str | None) -> str:
@@ -208,5 +208,26 @@ def format_duration_mmss(seconds: int | float | None) -> str:
 
     minutes, remain_seconds = divmod(total_seconds, 60)
     return f"{minutes}分{remain_seconds}秒"
+
+
+def to_display_team_no(source_team_id: int | None, fallback_team_index: int | None = None) -> int | None:
+    """把 PUBG 原始 teamId 转成页面展示用的队伍编号。"""
+    if source_team_id is not None:
+        try:
+            team_id = int(source_team_id)
+        except (TypeError, ValueError):
+            team_id = None
+        if team_id is not None:
+            if team_id > PUBG_TEAM_ID_OFFSET:
+                return team_id - PUBG_TEAM_ID_OFFSET
+            return team_id
+
+    if fallback_team_index is None:
+        return None
+
+    try:
+        return int(fallback_team_index)
+    except (TypeError, ValueError):
+        return None
 
 

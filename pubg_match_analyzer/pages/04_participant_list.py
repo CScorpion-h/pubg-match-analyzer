@@ -380,9 +380,15 @@ def sync_batch_round_name(match_id: str, default_name: str) -> None:
     round_name_manual[match_id] = value != default_name
     st.session_state.participant_batch_round_name_map = round_name_map
     st.session_state.participant_batch_round_name_manual = round_name_manual
+    clear_generated_participant_batch()
 
 
 signup_excel_bytes, signup_sheet_schema, selected_signup_mode_name = render_signup_cache_section()
+st.text_input(
+    "赛事名（可选）",
+    key="participant_batch_event_name",
+    on_change=clear_generated_participant_outputs,
+)
 st.divider()
 
 mode = st.radio(
@@ -395,6 +401,7 @@ mode = st.radio(
 overview = st.session_state.selected_match_overview
 teams = st.session_state.selected_team_summaries
 candidate_pool = st.session_state.candidate_match_pool
+participant_event_name = st.session_state.participant_batch_event_name.strip() or None
 
 if mode == "单局生成":
     if not overview:
@@ -418,6 +425,7 @@ if mode == "单局生成":
     col1.metric("队伍数", len(teams))
     col2.metric("最大队伍人数", max_team_size)
     col3.metric("模板类型", template_type)
+    single_round_name = "第1局"
 
     if st.button("生成参赛者名单", type="primary", use_container_width=True):
         try:
@@ -427,7 +435,8 @@ if mode == "单局生成":
                 signup_excel_bytes=signup_excel_bytes or None,
                 signup_sheet_schema=signup_sheet_schema,
                 signup_mode_name=selected_signup_mode_name or None,
-                round_name=None,
+                event_name=participant_event_name,
+                round_name=single_round_name,
             )
         except Exception as exc:
             st.error(f"生成失败：{exc}")
@@ -436,6 +445,8 @@ if mode == "单局生成":
             st.session_state.generated_participant_list_bytes = result.workbook_bytes
             st.session_state.generated_participant_list_filename = build_participant_list_filename(
                 match_id=overview.match_id,
+                event_name=participant_event_name,
+                round_name=single_round_name,
             )
             st.session_state.generated_participant_list_summary = {
                 "template_type": result.template_type,
@@ -518,7 +529,6 @@ else:
         st.info("请先从候选对局池中勾选至少一局。")
         st.stop()
 
-    st.text_input("赛事名（可选）", key="participant_batch_event_name")
     st.subheader("局次设置")
     st.caption("局次默认按 started_at 升序生成。若需要对外展示不同名称，可在这里手动修改。")
 
@@ -576,7 +586,7 @@ else:
                 signup_excel_bytes=signup_excel_bytes or None,
                 signup_sheet_schema=signup_sheet_schema,
                 signup_mode_name=selected_signup_mode_name or None,
-                event_name=st.session_state.participant_batch_event_name.strip(),
+                event_name=participant_event_name,
                 round_name_map=round_name_map,
                 current_overview=overview,
                 current_teams=teams,

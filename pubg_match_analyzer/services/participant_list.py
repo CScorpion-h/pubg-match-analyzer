@@ -17,7 +17,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from pubg_match_analyzer.core.constants import display_game_mode, display_game_mode_category
+from pubg_match_analyzer.core.constants import (
+    display_game_mode,
+    display_game_mode_category,
+    to_display_team_no,
+)
 from pubg_match_analyzer.core.models import MatchOverview, TeamSummary
 from pubg_match_analyzer.services.match_details import build_match_overview, extract_team_summaries
 from pubg_match_analyzer.services.pubg_api import PubgAPIClient
@@ -77,6 +81,26 @@ class BatchParticipantListResult:
     failed_matches: list[dict[str, str]]
 
 
+def _int_or_none(value: object) -> int | None:
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _participant_team_no(team: TeamSummary) -> int:
+    return int(to_display_team_no(_int_or_none(team.source_team_id), team.team_index) or team.team_index)
+
+
+def _participant_team_sort_key(team: TeamSummary) -> tuple[int, int, int]:
+    source_team_id = _int_or_none(team.source_team_id)
+    if source_team_id is None:
+        return (1, team.team_index, team.team_index)
+    return (0, source_team_id, team.team_index)
+
+
 def infer_participant_template(teams: list[TeamSummary]) -> tuple[str, str]:
     """根据队伍人数结构推导名单模板类型。"""
     if not teams:
@@ -112,7 +136,7 @@ def build_participant_list_workbook(
     missing_contact_count = 0
     conflict_rows: list[dict[str, str]] = []
 
-    for team in sorted(teams, key=lambda item: (int(item.source_team_id or 10**9), item.team_index)):
+    for team in sorted(teams, key=_participant_team_sort_key):
         players: list[ContactResolution] = []
         for player_name in team.player_names:
             total_players += 1
@@ -139,7 +163,7 @@ def build_participant_list_workbook(
             players.append(result)
         groups.append(
             TeamParticipantGroup(
-                display_team_no=int(team.source_team_id or team.team_index),
+                display_team_no=_participant_team_no(team),
                 players=players,
             )
         )
