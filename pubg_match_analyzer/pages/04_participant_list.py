@@ -13,6 +13,7 @@ from pubg_match_analyzer.services.participant_list import (
     build_participant_list_filename,
     build_participant_list_workbook,
     infer_participant_template,
+    parse_excluded_player_names,
 )
 from pubg_match_analyzer.services.pubg_api import PubgAPIClient, PubgAPIError
 from pubg_match_analyzer.services.signup_mapping import (
@@ -389,6 +390,16 @@ st.text_input(
     key="participant_batch_event_name",
     on_change=clear_generated_participant_outputs,
 )
+st.text_area(
+    "剔除官方人员游戏ID（可选）",
+    key="participant_excluded_ids_text",
+    height=120,
+    placeholder="每行一个游戏ID，例如：\nofficial_admin_1\nofficial_observer_2",
+    on_change=clear_generated_participant_outputs,
+)
+excluded_player_names = parse_excluded_player_names(st.session_state.participant_excluded_ids_text)
+if excluded_player_names:
+    st.caption(f"当前已配置 {len(excluded_player_names)} 个官方人员游戏ID，单局和批量导出时都会自动剔除。")
 st.divider()
 
 mode = st.radio(
@@ -437,6 +448,7 @@ if mode == "单局生成":
                 signup_mode_name=selected_signup_mode_name or None,
                 event_name=participant_event_name,
                 round_name=single_round_name,
+                excluded_player_names=excluded_player_names,
             )
         except Exception as exc:
             st.error(f"生成失败：{exc}")
@@ -455,6 +467,7 @@ if mode == "单局生成":
                 "filled_qq_count": result.filled_qq_count,
                 "missing_contact_count": result.missing_contact_count,
                 "conflict_count": result.conflict_count,
+                "excluded_player_count": result.excluded_player_count,
                 "used_signup_sheet": result.used_signup_sheet,
             }
             st.success("参赛者名单已生成。")
@@ -471,6 +484,7 @@ if mode == "单局生成":
         result_col2.metric("已填 QQ 数", summary.get("filled_qq_count", 0))
         result_col3.metric("缺失联系方式", summary.get("missing_contact_count", 0))
         result_col4.metric("QQ 冲突", summary.get("conflict_count", 0))
+        st.caption(f"本次已剔除官方人员：{summary.get('excluded_player_count', 0)} 人")
 
         if summary.get("used_signup_sheet"):
             mode_text = summary.get("signup_mode_name") or "未指定，已直接全表匹配"
@@ -588,6 +602,7 @@ else:
                 signup_mode_name=selected_signup_mode_name or None,
                 event_name=participant_event_name,
                 round_name_map=round_name_map,
+                excluded_player_names=excluded_player_names,
                 current_overview=overview,
                 current_teams=teams,
                 progress_callback=update_progress,
@@ -607,6 +622,7 @@ else:
                 "total_players": result.total_players,
                 "total_conflicts": result.total_conflicts,
                 "total_missing_contacts": result.total_missing_contacts,
+                "total_excluded_players": result.total_excluded_players,
                 "item_filenames": result.item_filenames,
                 "failed_matches": result.failed_matches,
                 "selected_match_ids": [item.match_id for item in selected_matches],
@@ -628,6 +644,7 @@ else:
         extra_col1, extra_col2 = st.columns(2)
         extra_col1.metric("缺失联系方式", batch_summary.get("total_missing_contacts", 0))
         extra_col2.metric("QQ 冲突", batch_summary.get("total_conflicts", 0))
+        st.caption(f"本次批量已剔除官方人员：{batch_summary.get('total_excluded_players', 0)} 人")
         st.caption("ZIP 内文件：" + "、".join(batch_summary.get("item_filenames", [])))
         failed_matches = batch_summary.get("failed_matches", [])
         if failed_matches:

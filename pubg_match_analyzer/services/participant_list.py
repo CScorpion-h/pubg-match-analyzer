@@ -20,6 +20,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from pubg_match_analyzer.core.constants import (
     display_game_mode,
     display_game_mode_category,
+    normalize_player_name,
     to_display_team_no,
 )
 from pubg_match_analyzer.core.models import MatchOverview, TeamSummary
@@ -63,6 +64,7 @@ class ParticipantListResult:
     filled_qq_count: int
     missing_contact_count: int
     conflict_count: int
+    excluded_player_count: int
     used_signup_sheet: bool
 
 
@@ -77,8 +79,23 @@ class BatchParticipantListResult:
     total_players: int
     total_conflicts: int
     total_missing_contacts: int
+    total_excluded_players: int
     item_filenames: list[str]
     failed_matches: list[dict[str, str]]
+
+
+def parse_excluded_player_names(raw_text: str | None) -> list[str]:
+    """把多行人工输入的官方人员游戏ID整理成去重列表。"""
+    seen: set[str] = set()
+    values: list[str] = []
+    for line in str(raw_text or "").splitlines():
+        cleaned = line.strip()
+        normalized = normalize_player_name(cleaned)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        values.append(cleaned)
+    return values
 
 
 def _int_or_none(value: object) -> int | None:
@@ -123,22 +140,29 @@ def build_participant_list_workbook(
     signup_mode_name: str | None = None,
     event_name: str | None = None,
     round_name: str | None = None,
+    excluded_player_names: list[str] | None = None,
 ) -> ParticipantListResult:
     """生成参赛者名单工作簿。"""
-    template_type_label, template_type_code = infer_participant_template(teams)
     lookup = None
     if signup_excel_bytes and signup_sheet_schema is not None:
         lookup = SignupContactLookup.from_excel_bytes(signup_excel_bytes, signup_sheet_schema)
 
+    excluded_name_keys = {
+        normalize_player_name(name) for name in (excluded_player_names or []) if normalize_player_name(name)
+    }
     groups: list[TeamParticipantGroup] = []
     total_players = 0
     filled_qq_count = 0
     missing_contact_count = 0
+    excluded_player_count = 0
     conflict_rows: list[dict[str, str]] = []
 
     for team in sorted(teams, key=_participant_team_sort_key):
         players: list[ContactResolution] = []
         for player_name in team.player_names:
+            if normalize_player_name(player_name) in excluded_name_keys:
+                excluded_player_count += 1
+                continue
             total_players += 1
             if lookup is None:
                 result = ContactResolution(player_name=player_name, status="no_signup")
@@ -161,12 +185,34 @@ def build_participant_list_workbook(
                     }
                 )
             players.append(result)
+        if not players:
+            continue
         groups.append(
             TeamParticipantGroup(
                 display_team_no=_participant_team_no(team),
                 players=players,
             )
         )
+
+    if not groups:
+        raise ValueError("剔除官方人员后，当前对局已没有可导出的玩家。")
+
+    template_type_label, template_type_code = infer_participant_template(
+        [
+            TeamSummary(
+                match_id=overview.match_id,
+                team_index=group.display_team_no,
+                source_team_id=group.display_team_no,
+                rank=None,
+                won=False,
+                player_count=len(group.players),
+                player_names=[player.player_name for player in group.players],
+                total_kills=0,
+                total_damage=0.0,
+            )
+            for group in groups
+        ]
+    )
 
     workbook = Workbook()
     worksheet = workbook.active
@@ -193,6 +239,7 @@ def build_participant_list_workbook(
         filled_qq_count=filled_qq_count,
         missing_contact_count=missing_contact_count,
         conflict_count=len(conflict_rows),
+        excluded_player_count=excluded_player_count,
         used_signup_sheet=signup_excel_bytes is not None and signup_sheet_schema is not None,
     )
 
@@ -550,6 +597,7 @@ def build_batch_participant_zip(
     signup_mode_name: str | None,
     event_name: str | None,
     round_name_map: dict[str, str],
+    excluded_player_names: list[str] | None = None,
     current_overview: MatchOverview | None = None,
     current_teams: list[TeamSummary] | None = None,
     progress_callback: Callable[[int, int, str, str], None] | None = None,
@@ -563,6 +611,7 @@ def build_batch_participant_zip(
     total_players = 0
     total_conflicts = 0
     total_missing_contacts = 0
+    total_excluded_players = 0
     zip_buffer = BytesIO()
     with ZipFile(zip_buffer, mode="w", compression=ZIP_DEFLATED) as zf:
         total = len(match_ids)
@@ -586,6 +635,7 @@ def build_batch_participant_zip(
                     signup_mode_name=signup_mode_name,
                     event_name=event_name,
                     round_name=round_name_map.get(match_id),
+                    excluded_player_names=excluded_player_names,
                 )
                 file_name = build_participant_list_filename(
                     match_id=match_id,
@@ -597,6 +647,7 @@ def build_batch_participant_zip(
                 total_players += workbook_result.total_players
                 total_conflicts += workbook_result.conflict_count
                 total_missing_contacts += workbook_result.missing_contact_count
+                total_excluded_players += workbook_result.excluded_player_count
             except Exception as exc:
                 failed_matches.append(
                     {
@@ -623,6 +674,7 @@ def build_batch_participant_zip(
         total_players=total_players,
         total_conflicts=total_conflicts,
         total_missing_contacts=total_missing_contacts,
+        total_excluded_players=total_excluded_players,
         item_filenames=item_filenames,
         failed_matches=failed_matches,
     )

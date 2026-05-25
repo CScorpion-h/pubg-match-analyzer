@@ -33,6 +33,7 @@ PERSISTED_WIDGET_KEYS = (
     "participant_generation_mode",
     "participant_batch_selected_ids",
     "participant_batch_event_name",
+    "participant_excluded_ids_text",
     "participant_signup_manual_mapping",
     "participant_signup_sheet_select",
     "participant_signup_mode_col_select",
@@ -43,7 +44,12 @@ PERSISTED_WIDGET_KEYS = (
 APP_STORAGE_DIR = Path(os.getenv("APPDATA") or (Path.home() / "AppData" / "Roaming")) / "pubg_match_analyzer"
 LOCAL_SETTINGS_FILE = APP_STORAGE_DIR / "local_settings.json"
 LEGACY_LOCAL_SETTINGS_FILE = Path(__file__).resolve().parents[1] / "configs" / "local_settings.json"
-LOCAL_SETTING_KEYS = ("api_key", "platform", "recent_match_limit")
+LOCAL_SETTING_KEYS = (
+    "api_key",
+    "platform",
+    "recent_match_limit",
+    "participant_excluded_ids_text",
+)
 
 
 def _normalize_local_settings(raw: dict[str, object]) -> dict[str, object]:
@@ -65,6 +71,10 @@ def _normalize_local_settings(raw: dict[str, object]) -> dict[str, object]:
         recent_match_limit = None
     if recent_match_limit is not None:
         settings["recent_match_limit"] = min(MAX_SEARCH_WINDOW_LIMIT, max(5, recent_match_limit))
+
+    participant_excluded_ids_text = raw.get("participant_excluded_ids_text")
+    if isinstance(participant_excluded_ids_text, str):
+        settings["participant_excluded_ids_text"] = participant_excluded_ids_text.strip()
 
     return settings
 
@@ -185,6 +195,7 @@ def ensure_session_state() -> None:
         "participant_generation_mode": "单局生成",
         "participant_batch_selected_ids": [],
         "participant_batch_event_name": "",
+        "participant_excluded_ids_text": local_settings.get("participant_excluded_ids_text", ""),
         "participant_batch_round_name_map": {},
         "participant_batch_round_name_manual": {},
         "generated_participant_batch_zip_bytes": b"",
